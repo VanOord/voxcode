@@ -42,19 +42,12 @@ Add Databricks MCP servers to Claude Code. Supported server types:
 
 You will be prompted for OAuth credentials (client ID and secret) that are reused for all servers added in the session.
 
-### 3. Launch a tool
+### 3. Launch an agent
 
 ```bash
 coding-gateway                    # launches Codex (default)
-coding-gateway --tool claude
-coding-gateway --tool gemini
-```
-
-You can override the model at launch time:
-
-```bash
-coding-gateway --tool claude --model databricks-claude-opus-4-7
-coding-gateway --tool gemini --model databricks-gemini-2-5-pro
+coding-gateway --agent claude
+coding-gateway --agent gemini
 ```
 
 ---
@@ -65,7 +58,7 @@ coding-gateway --tool gemini --model databricks-gemini-2-5-pro
 |---------|-------------|
 | `coding-gateway status` | Show current workspace, base URLs, managed config files, and selected models |
 | `coding-gateway usage` | Show AI Gateway usage summary |
-| `coding-gateway logout` | Clear saved state and restore backed-up config files |
+| `coding-gateway revert` | Clear saved state and restore backed-up config files |
 | `coding-gateway configure --dry-run` | Preview config files without writing them |
 
 ## Usage Reporting
@@ -90,7 +83,7 @@ Requires Databricks AI Gateway. Queries `system.ai_gateway.usage` and shows:
 | `~/.claude/settings.json` | Claude Code |
 | `~/.gemini/.env` | Gemini CLI |
 
-Existing files are backed up before being overwritten. `coding-gateway logout` restores backups.
+Existing files are backed up before being overwritten. `coding-gateway revert` restores backups.
 
 ## Authentication
 
