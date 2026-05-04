@@ -1402,7 +1402,10 @@ def validate_all_tools(state: dict) -> None:
     console.print()
     console.print(Panel("Testing each tool with a quick message...", title="Validating", style="bold blue", expand=False))
     results: list[tuple[str, bool]] = []
+    available_tools = state.get("available_tools") or []
     for tool, spec in TOOL_SPECS.items():
+        if tool not in available_tools:
+            continue
         with spinner(f"Validating {spec['display']}..."):
             ok, err = validate_tool(tool)
         results.append((tool, ok))
