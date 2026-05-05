@@ -31,6 +31,7 @@ from rich.panel import Panel
 
 APP_DIR = Path.home() / ".coding-gateway"
 STATE_PATH = APP_DIR / "state.json"
+STATE_VERSION = 2
 
 CODEX_CONFIG_DIR = Path.home() / ".codex"
 CODEX_CONFIG_PATH = CODEX_CONFIG_DIR / "config.toml"
@@ -244,23 +245,42 @@ def normalize_tool(tool: str) -> str:
     return normalized
 
 
-def load_state() -> dict:
+def load_full_state() -> dict:
+    """Load the entire state file. Returns empty structure if missing or wrong version."""
     if not STATE_PATH.exists():
-        return {}
+        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
     try:
-        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        return hydrate_state(state)
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
+    if not isinstance(data, dict) or data.get("state_version") != STATE_VERSION:
+        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
+    return data
+
+
+def load_state() -> dict:
+    """Load the current workspace's state as a flat dict."""
+    full = load_full_state()
+    workspace = full.get("current_workspace")
+    if not workspace:
         return {}
+    ws_state = full.get("workspaces", {}).get(workspace, {})
+    ws_state["workspace"] = workspace
+    return hydrate_state(ws_state)
 
 
 def save_state(state: dict) -> None:
+    """Save workspace state back into the per-workspace structure."""
     if _dry_run:
         return
+    full = load_full_state()
+    workspace = state.get("workspace") or full.get("current_workspace")
+    if workspace:
+        full["current_workspace"] = workspace
+        full["workspaces"][workspace] = hydrate_state(state)
     try:
-        state = hydrate_state(state)
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        STATE_PATH.write_text(json.dumps(full, indent=2), encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(f"Failed to write state file: {STATE_PATH}") from exc
 
@@ -275,10 +295,6 @@ def hydrate_state(state: dict) -> dict:
     if not isinstance(managed_configs, dict):
         managed_configs = {}
     hydrated["managed_configs"] = managed_configs
-    selected_models = hydrated.get("selected_models")
-    if not isinstance(selected_models, dict):
-        selected_models = {}
-    hydrated["selected_models"] = selected_models
 
     workspace = hydrated.get("workspace")
     if workspace:
@@ -291,9 +307,15 @@ def hydrate_state(state: dict) -> dict:
 
 
 def clear_state() -> None:
+    """Remove the current workspace entry from state."""
+    full = load_full_state()
+    workspace = full.get("current_workspace")
+    if workspace:
+        full.get("workspaces", {}).pop(workspace, None)
+        full["current_workspace"] = None
     try:
-        if STATE_PATH.exists():
-            STATE_PATH.unlink()
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_text(json.dumps(full, indent=2), encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(f"Failed to clear state file: {STATE_PATH}") from exc
 
@@ -538,6 +560,34 @@ def fetch_gemini_models(workspace: str, token: str) -> list[str]:
             gemini.append(name)
 
     return sorted(gemini)
+
+
+def fetch_codex_models(workspace: str, token: str) -> list[str]:
+    """Return Codex/OpenAI model names from serving-endpoints:foundation-models."""
+    hostname = workspace_hostname(workspace)
+    request = urllib_request.Request(
+        f"https://{hostname}/api/2.0/serving-endpoints:foundation-models",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError):
+        return []
+
+    codex: list[str] = []
+    for ep in data.get("endpoints", []):
+        name = ep.get("name", "")
+        entities = ep.get("config", {}).get("served_entities", [])
+        api_types: set[str] = set()
+        for se in entities:
+            fm = se.get("foundation_model", {})
+            if fm.get("ai_gateway_v2_supported") is True:
+                api_types.update(fm.get("api_types", []))
+        if "openai/v1/responses" in api_types:
+            codex.append(name)
+
+    return sorted(codex)
 
 
 def detect_ai_gateway_v2(workspace: str, token: str) -> bool:
@@ -985,24 +1035,48 @@ def build_tool_base_url(
             else f"{workspace}/serving-endpoints/gemini"
         )
     if tool == "opencode":
-        return (
-            f"{workspace}/ai-gateway/anthropic"
-            if use_ai_gateway_v2
-            else f"{workspace}/serving-endpoints/anthropic"
-        )
+        raise RuntimeError("OpenCode has multiple base URLs — use build_opencode_base_urls() instead.")
     raise RuntimeError(f"Unsupported tool '{tool}'.")
+
+
+def build_opencode_base_urls(workspace: str, use_ai_gateway_v2: bool) -> dict[str, str]:
+    return {
+        "anthropic": build_tool_base_url("claude", workspace, use_ai_gateway_v2) + "/v1",
+        "gemini": build_tool_base_url("gemini", workspace, use_ai_gateway_v2) + "/v1beta",
+    }
 
 
 def build_shared_base_urls(
     workspace: str,
     use_ai_gateway_v2: bool,
-) -> dict[str, str]:
-    return {
+) -> dict[str, str | dict[str, str]]:
+    urls: dict[str, str | dict[str, str]] = {
         tool: build_tool_base_url(tool, workspace, use_ai_gateway_v2)
         for tool in TOOL_SPECS
+        if tool != "opencode"
     }
+    urls["opencode"] = build_opencode_base_urls(workspace, use_ai_gateway_v2)
+    return urls
 
 
+
+
+def default_model_for_tool(tool: str, state: dict) -> str | None:
+    """Pick a sensible default model from the fetched model lists."""
+    if tool == "claude":
+        claude_models = state.get("claude_models") or {}
+        return claude_models.get("sonnet") or claude_models.get("opus") or claude_models.get("haiku")
+    elif tool == "opencode":
+        opencode_models = state.get("opencode_models") or {}
+        anthropic = opencode_models.get("anthropic") or []
+        if anthropic:
+            return anthropic[0]
+        gemini = opencode_models.get("gemini") or []
+        return gemini[0] if gemini else None
+    elif tool == "gemini":
+        gemini_models = state.get("gemini_models") or []
+        return gemini_models[0] if gemini_models else None
+    return None
 
 
 def resolve_launch_model(
@@ -1013,18 +1087,10 @@ def resolve_launch_model(
     if tool == "codex":
         return state, None
 
-    selected_models = dict(state.get("selected_models") or {})
-    if explicit_model:
-        selected_models[tool] = explicit_model
-        state["selected_models"] = selected_models
-        save_state(state)
-        return state, explicit_model
-
-    existing_model = selected_models.get(tool)
-    if existing_model:
-        return state, existing_model
-
-    raise RuntimeError(f"No model is configured for {tool}. Run `coding-gateway configure` to set one.")
+    model = explicit_model or default_model_for_tool(tool, state)
+    if not model:
+        raise RuntimeError(f"No models available for {tool}. Run `coding-gateway configure` to set up your workspace.")
+    return state, model
 
 
 def render_codex_config(workspace: str, use_ai_gateway_v2: bool) -> str:
@@ -1091,41 +1157,37 @@ def render_gemini_env(
 
 
 def render_opencode_config(
-    workspace: str,
-    use_ai_gateway_v2: bool,
     model: str,
     token: str,
-    claude_models: dict[str, str] | None = None,
-    gemini_models: list[str] | None = None,
+    opencode_base_urls: dict[str, str],
+    opencode_models: dict[str, list[str]],
 ) -> dict:
     """Generate opencode.json config with Anthropic and Google providers."""
-    anthropic_url = build_tool_base_url("claude", workspace, use_ai_gateway_v2) + "/v1"
-    gemini_url = build_tool_base_url("gemini", workspace, use_ai_gateway_v2) + "/v1beta"
     auth_headers = {"Authorization": f"Bearer {token}"}
 
-    anthropic_model_ids = {m: {} for m in (claude_models or {}).values() if m}
-    gemini_model_ids = {m: {} for m in (gemini_models or [])}
+    anthropic_models = opencode_models.get("anthropic") or []
+    gemini_models = opencode_models.get("gemini") or []
 
-    providers: dict = {
-        "databricks-anthropic": {
+    providers: dict = {}
+    if anthropic_models:
+        providers["databricks-anthropic"] = {
             "npm": "@ai-sdk/anthropic",
             "options": {
-                "baseURL": anthropic_url,
+                "baseURL": opencode_base_urls["anthropic"],
                 "apiKey": token,
                 "headers": auth_headers,
             },
-            "models": anthropic_model_ids,
-        },
-    }
-    if gemini_model_ids:
+            "models": {m: {} for m in anthropic_models},
+        }
+    if gemini_models:
         providers["databricks-google"] = {
             "npm": "@ai-sdk/google",
             "options": {
-                "baseURL": gemini_url,
+                "baseURL": opencode_base_urls["gemini"],
                 "apiKey": token,
                 "headers": auth_headers,
             },
-            "models": gemini_model_ids,
+            "models": {m: {} for m in gemini_models},
         }
 
     return {"provider": providers, "model": model}
@@ -1271,20 +1333,26 @@ def configure_shared_state(workspace: str) -> dict:
         with spinner("Fetching available models..."):
             claude_models = fetch_ai_gateway_claude_models(workspace, token)
             gemini_models = fetch_gemini_models(workspace, token)
+            codex_models = fetch_codex_models(workspace, token)
     else:
         print_note("AI Gateway not detected — using workspace serving endpoints")
         claude_models = {}
         gemini_models = []
-    state = load_state()
-    state.update(
-        {
-            "workspace": workspace,
-            "use_ai_gateway_v2": use_ai_gateway_v2,
-            "claude_models": claude_models,
-            "gemini_models": gemini_models,
-            "base_urls": build_shared_base_urls(workspace, use_ai_gateway_v2),
-        }
-    )
+        codex_models = []
+    opencode_models: dict[str, list[str]] = {}
+    if claude_models:
+        opencode_models["anthropic"] = list(claude_models.values())
+    if gemini_models:
+        opencode_models["gemini"] = gemini_models
+    state = {
+        "workspace": workspace,
+        "use_ai_gateway_v2": use_ai_gateway_v2,
+        "claude_models": claude_models,
+        "gemini_models": gemini_models,
+        "codex_models": codex_models,
+        "opencode_models": opencode_models,
+        "base_urls": build_shared_base_urls(workspace, use_ai_gateway_v2),
+    }
     save_state(state)
     return state
 
@@ -1339,15 +1407,16 @@ def write_gemini_tool_config(state: dict, model: str) -> dict:
 def write_opencode_tool_config(state: dict, model: str) -> dict:
     backup_existing_file(OPENCODE_CONFIG_PATH, OPENCODE_BACKUP_PATH)
     token = get_databricks_token(state["workspace"])
+    opencode_base_urls = state.get("base_urls", {}).get("opencode") or build_opencode_base_urls(
+        state["workspace"], bool(state.get("use_ai_gateway_v2"))
+    )
     write_json_file(
         OPENCODE_CONFIG_PATH,
         render_opencode_config(
-            state["workspace"],
-            bool(state.get("use_ai_gateway_v2")),
             model,
             token,
-            state.get("claude_models") or {},
-            state.get("gemini_models") or [],
+            opencode_base_urls,
+            state.get("opencode_models") or {},
         ),
     )
     state = mark_tool_managed(state, "opencode")
@@ -1357,7 +1426,7 @@ def write_opencode_tool_config(state: dict, model: str) -> dict:
 
 def refresh_gemini_token_once(state: dict) -> str:
     token = get_databricks_token(state["workspace"])
-    model = (state.get("selected_models") or {}).get("gemini")
+    model = default_model_for_tool("gemini", state)
     if not model:
         raise RuntimeError("No Gemini model is configured.")
     write_text_file(
@@ -1383,18 +1452,19 @@ def refresh_gemini_env_forever(state: dict, stop_event: threading.Event) -> None
 def refresh_opencode_token_once(state: dict) -> str:
     """Get a fresh token and rewrite opencode.json with it."""
     token = get_databricks_token(state["workspace"])
-    model = (state.get("selected_models") or {}).get("opencode")
+    model = default_model_for_tool("opencode", state)
     if not model:
         raise RuntimeError("No OpenCode model is configured.")
+    opencode_base_urls = state.get("base_urls", {}).get("opencode") or build_opencode_base_urls(
+        state["workspace"], bool(state.get("use_ai_gateway_v2"))
+    )
     write_json_file(
         OPENCODE_CONFIG_PATH,
         render_opencode_config(
-            state["workspace"],
-            bool(state.get("use_ai_gateway_v2")),
             model,
             token,
-            state.get("claude_models") or {},
-            state.get("gemini_models") or [],
+            opencode_base_urls,
+            state.get("opencode_models") or {},
         ),
     )
     return token
@@ -1426,15 +1496,33 @@ def configure_tool(tool: str, state: dict, model: str | None = None) -> dict:
     raise RuntimeError(f"Unsupported tool '{tool}'.")
 
 
-def check_gateway_endpoint(workspace: str, token: str, tool: str, use_ai_gateway_v2: bool) -> bool:
-    """Check if a tool's AI Gateway endpoint is reachable."""
-    base_url = build_tool_base_url(tool, workspace, use_ai_gateway_v2)
-    hostname = workspace_hostname(workspace)
-    if tool in ("claude", "opencode"):
-        url = f"https://{hostname}/ai-gateway/anthropic/v1/messages" if use_ai_gateway_v2 else f"{base_url}/v1/messages"
+def check_gateway_endpoint(state: dict, tool: str) -> bool:
+    """Check if a tool has models available based on state, or fall back to HEAD check."""
+    use_ai_gateway_v2 = bool(state.get("use_ai_gateway_v2"))
+    if use_ai_gateway_v2:
+        if tool == "claude":
+            return bool(state.get("claude_models"))
+        elif tool == "opencode":
+            return bool(state.get("opencode_models"))
+        elif tool == "codex":
+            return bool(state.get("codex_models"))
+        elif tool == "gemini":
+            return bool(state.get("gemini_models"))
+        return False
+    # Non-v2: fall back to HEAD check
+    workspace = state["workspace"]
+    token = get_databricks_token(workspace)
+    if tool == "opencode":
+        base_url = build_tool_base_url("claude", workspace, False)
+        url = f"{base_url}/v1/messages"
+    elif tool == "claude":
+        base_url = build_tool_base_url(tool, workspace, False)
+        url = f"{base_url}/v1/messages"
     elif tool == "codex":
+        base_url = build_tool_base_url(tool, workspace, False)
         url = f"{base_url}/responses"
     elif tool == "gemini":
+        base_url = build_tool_base_url(tool, workspace, False)
         url = f"{base_url}/v1beta/models"
     else:
         return False
@@ -1449,15 +1537,12 @@ def check_gateway_endpoint(workspace: str, token: str, tool: str, use_ai_gateway
 
 
 def configure_all_tools(state: dict) -> dict:
-    workspace = state["workspace"]
-    token = get_databricks_token(workspace)
-    use_ai_gateway_v2 = bool(state.get("use_ai_gateway_v2"))
     available_tools: list[str] = []
     unavailable_tools: list[str] = []
 
     for tool in TOOL_SPECS:
         with spinner(f"Checking {TOOL_SPECS[tool]['display']} availability..."):
-            ok = check_gateway_endpoint(workspace, token, tool, use_ai_gateway_v2)
+            ok = check_gateway_endpoint(state, tool)
         if ok:
             available_tools.append(tool)
         else:
@@ -1481,12 +1566,18 @@ def configure_all_tools(state: dict) -> dict:
 def ensure_provider_state(tool: str) -> dict:
     state = load_state()
     workspace = state.get("workspace")
-    if workspace:
-        ensure_databricks_auth(workspace)
-        return state
-
-    workspace = prompt_for_configuration(tool)
-    return configure_shared_state(workspace)
+    if not workspace:
+        raise RuntimeError(
+            "No workspace configured. Run `coding-gateway configure` first."
+        )
+    available_tools = state.get("available_tools") or []
+    if tool not in available_tools:
+        raise RuntimeError(
+            f"{TOOL_SPECS[tool]['display']} is not available on this workspace. "
+            f"Run `coding-gateway configure` to set up your agents."
+        )
+    ensure_databricks_auth(workspace)
+    return state
 
 
 def validate_tool(tool: str) -> tuple[bool, str]:
@@ -1541,6 +1632,8 @@ def validate_all_tools(state: dict) -> None:
             print_success(f"{spec['display']} is working")
         else:
             print_err(f"{spec['display']}: {err}")
+            managed = bool(state.get("managed_configs", {}).get(tool))
+            restore_file(spec["config_path"], spec["backup_path"], managed)
             available_tools.remove(tool)
     state["available_tools"] = available_tools
     save_state(state)
@@ -1776,7 +1869,7 @@ def launch_tool(tool: str, tool_args: list[str]) -> None:
 
 def launch_gemini_tool(state: dict, tool_args: list[str]) -> None:
     token = refresh_gemini_token_once(state)
-    model = (state.get("selected_models") or {}).get("gemini")
+    model = default_model_for_tool("gemini", state)
     if not model:
         raise RuntimeError("No Gemini model is configured.")
     env = build_gemini_runtime_env(
@@ -1837,7 +1930,6 @@ def status() -> int:
     workspace = state.get("workspace")
     use_ai_gateway_v2 = bool(state.get("use_ai_gateway_v2"))
     managed_configs = state.get("managed_configs") or {}
-    selected_models = state.get("selected_models") or {}
 
     console.print(heading("coding-gateway status"))
     console.print(
@@ -1855,12 +1947,12 @@ def status() -> int:
 
     print_heading("Tools")
     for tool, spec in TOOL_SPECS.items():
-        base_url = state["base_urls"].get(tool, "not configured")
+        base_url = state.get("base_urls", {}).get(tool, "not configured")
         managed = bool(managed_configs.get(tool))
         config_path = spec["config_path"]
         print_kv("Tool", spec["display"])
         if tool != "codex":
-            print_kv("Selected model", selected_models.get(tool) or "not selected")
+            print_kv("Model", default_model_for_tool(tool, state) or "not available")
         print_kv("Base URL", base_url)
         print_kv("Managed by Databricks", "yes" if managed else "no")
         print_kv("Config file", str(config_path) if config_path.exists() else "missing")
