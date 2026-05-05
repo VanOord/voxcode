@@ -3,2032 +3,130 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-import platform
-import shutil
-import signal
-import subprocess
-import sys
-import itertools
-import threading
-import time
-import textwrap
-from contextlib import contextmanager
-from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Annotated
-from urllib import error as urllib_error
-from urllib import request as urllib_request
-from urllib.parse import urlparse
 
-import questionary
-import tomlkit
 import typer
-from rich.console import Console
 from rich.panel import Panel
 
-
-APP_DIR = Path.home() / ".coding-gateway"
-STATE_PATH = APP_DIR / "state.json"
-STATE_VERSION = 2
-
-CODEX_CONFIG_DIR = Path.home() / ".codex"
-CODEX_CONFIG_PATH = CODEX_CONFIG_DIR / "config.toml"
-CLAUDE_CONFIG_DIR = Path.home() / ".claude"
-CLAUDE_SETTINGS_PATH = CLAUDE_CONFIG_DIR / "settings.json"
-GEMINI_CONFIG_DIR = Path.home() / ".gemini"
-GEMINI_ENV_PATH = GEMINI_CONFIG_DIR / ".env"
-
-CODEX_BACKUP_PATH = APP_DIR / "codex-config.backup.toml"
-CLAUDE_BACKUP_PATH = APP_DIR / "claude-settings.backup.json"
-GEMINI_BACKUP_PATH = APP_DIR / "gemini-env.backup"
-OPENCODE_CONFIG_DIR = Path.home() / ".config" / "opencode"
-OPENCODE_CONFIG_PATH = OPENCODE_CONFIG_DIR / "opencode.json"
-OPENCODE_BACKUP_PATH = APP_DIR / "opencode-config.backup.json"
-
-UNIX_DATABRICKS_INSTALL_URL = (
-    "https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh"
+from coding_tool_gateway.agents import (
+    DEFAULT_TOOL,
+    TOOL_SPECS,
+    configure_all_tools,
+    configure_tool,
+    default_model_for_tool,
+    ensure_bootstrap_dependencies,
+    ensure_provider_state,
+    install_tool_binary,
+    normalize_tool,
+    resolve_launch_model,
+    validate_all_tools,
 )
-WINDOWS_DATABRICKS_INSTALL_URL = (
-    "https://raw.githubusercontent.com/databricks/setup-cli/main/install.ps1"
+from coding_tool_gateway.agents import (
+    launch as launch_agent,
 )
-AI_GATEWAY_V2_DOCS_URL = "https://docs.databricks.com/aws/en/ai-gateway/overview-beta"
-TOKEN_REFRESH_INTERVAL_SECONDS = 1800
-SCRUBBED_DATABRICKS_ENV_VARS = (
-    "DATABRICKS_TOKEN",
-    "DATABRICKS_CLIENT_ID",
-    "DATABRICKS_CLIENT_SECRET",
-    "DATABRICKS_USERNAME",
-    "DATABRICKS_PASSWORD",
-    "DATABRICKS_AUTH_TYPE",
+from coding_tool_gateway.config_io import restore_file, set_dry_run
+from coding_tool_gateway.databricks import (
+    build_shared_base_urls,
+    ensure_ai_gateway_v2,
+    fetch_ai_gateway_claude_models,
+    fetch_codex_models,
+    fetch_gemini_models,
+    get_databricks_profiles,
+    get_databricks_token,
+    install_databricks_cli,
+    normalize_workspace_url,
+    run_databricks_login,
 )
-
-TOOL_SPECS = {
-    "codex": {
-        "binary": "codex",
-        "package": "@openai/codex",
-        "display": "Codex",
-        "config_path": CODEX_CONFIG_PATH,
-        "backup_path": CODEX_BACKUP_PATH,
-    },
-    "claude": {
-        "binary": "claude",
-        "package": "@anthropic-ai/claude-code",
-        "display": "Claude Code",
-        "config_path": CLAUDE_SETTINGS_PATH,
-        "backup_path": CLAUDE_BACKUP_PATH,
-    },
-    "gemini": {
-        "binary": "gemini",
-        "package": "@google/gemini-cli",
-        "display": "Gemini CLI",
-        "config_path": GEMINI_ENV_PATH,
-        "backup_path": GEMINI_BACKUP_PATH,
-    },
-    "opencode": {
-        "binary": "opencode",
-        "package": "opencode-ai",
-        "display": "OpenCode",
-        "config_path": OPENCODE_CONFIG_PATH,
-        "backup_path": OPENCODE_BACKUP_PATH,
-    },
-}
-TOOL_ALIASES = {
-    "codex": "codex",
-    "claude": "claude",
-    "claude-code": "claude",
-    "gemini": "gemini",
-    "gemini-cli": "gemini",
-    "opencode": "opencode",
-}
-DEFAULT_TOOL = "codex"
-USAGE_BREAKDOWN_DAYS = 7
-USAGE_SUMMARY_DAYS = 30
-BUNDLE_VERSION = 1
-
-_dry_run = False
-
-
-console = Console(highlight=False)
-err_console = Console(stderr=True, highlight=False)
-
-
-def print_section(title: str) -> None:
-    console.print()
-    console.print(Panel(title, style="bold blue", expand=False))
-
-
-def print_heading(text: str) -> None:
-    console.print()
-    console.print(f"[bold]{text}[/bold]")
-
-
-def print_kv(key: str, val: str) -> None:
-    console.print(f"  [bold]{key}:[/bold] [cyan]{val}[/cyan]")
-
-
-def print_note(text: str) -> None:
-    console.print(f"[dim]•[/dim] {text}")
-
-
-def print_success(message: str) -> None:
-    console.print(f"[bold green]✔[/bold green] {message}")
-
-
-def print_warning(message: str) -> None:
-    console.print(f"[bold yellow]![/bold yellow] {message}")
-
-
-def print_err(message: str) -> None:
-    err_console.print(f"[bold red]ERROR[/bold red] {message}")
-
-
-def heading(text: str) -> str:
-    return f"[bold blue]{text}[/bold blue]"
-
-
-def label(text: str) -> str:
-    return f"[bold]{text}[/bold]"
-
-
-def value(text: str) -> str:
-    return f"[cyan]{text}[/cyan]"
-
-
-def muted(text: str) -> str:
-    return f"[dim]{text}[/dim]"
-
-
-def status_badge(text: str, kind: str) -> str:
-    color = {"ok": "green", "warn": "yellow", "error": "red", "info": "blue"}.get(kind, "bold")
-    return f"[bold {color}]{text}[/bold {color}]"
-
-
-@contextmanager
-def spinner(message: str):
-    if not sys.stdout.isatty():
-        yield
-        return
-
-    stop_event = threading.Event()
-
-    def spin() -> None:
-        for frame in itertools.cycle("|/-\\"):
-            if stop_event.is_set():
-                break
-            sys.stdout.write(f"\r\033[2m{frame}\033[0m {message}")
-            sys.stdout.flush()
-            time.sleep(0.1)
-        sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")
-        sys.stdout.flush()
-
-    thread = threading.Thread(target=spin, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop_event.set()
-        thread.join(timeout=1)
-
-
-def run(
-    args: list[str],
-    *,
-    check: bool = True,
-    capture_output: bool = False,
-    text: bool = False,
-    env: dict[str, str] | None = None,
-    timeout: int | None = None,
-) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        args,
-        check=check,
-        capture_output=capture_output,
-        text=text,
-        env=env,
-        timeout=timeout,
-    )
-
-
-def build_databricks_cli_env(workspace: str) -> dict[str, str]:
-    env = os.environ.copy()
-    env["DATABRICKS_HOST"] = workspace
-    for key in SCRUBBED_DATABRICKS_ENV_VARS:
-        env.pop(key, None)
-    return env
-
-
-def workspace_hostname(workspace: str) -> str:
-    parsed = urlparse(normalize_workspace_url(workspace))
-    if not parsed.hostname:
-        raise RuntimeError(f"Unable to derive hostname from workspace URL: {workspace}")
-    return parsed.hostname
-
-
-def normalize_workspace_url(workspace: str) -> str:
-    workspace = workspace.strip()
-    if not workspace:
-        raise ValueError("Workspace URL cannot be empty.")
-    if not workspace.startswith(("http://", "https://")):
-        workspace = f"https://{workspace}"
-    return workspace.rstrip("/")
-
-
-def normalize_tool(tool: str) -> str:
-    normalized = TOOL_ALIASES.get(tool.strip().lower())
-    if not normalized:
-        raise RuntimeError(
-            f"Unsupported tool '{tool}'. Use one of: codex, claude, gemini, opencode."
-        )
-    return normalized
-
-
-def load_full_state() -> dict:
-    """Load the entire state file. Returns empty structure if missing or wrong version."""
-    if not STATE_PATH.exists():
-        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
-    try:
-        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
-    if not isinstance(data, dict) or data.get("state_version") != STATE_VERSION:
-        return {"state_version": STATE_VERSION, "current_workspace": None, "workspaces": {}}
-    return data
-
-
-def load_state() -> dict:
-    """Load the current workspace's state as a flat dict."""
-    full = load_full_state()
-    workspace = full.get("current_workspace")
-    if not workspace:
-        return {}
-    ws_state = full.get("workspaces", {}).get(workspace, {})
-    ws_state["workspace"] = workspace
-    return hydrate_state(ws_state)
-
-
-def save_state(state: dict) -> None:
-    """Save workspace state back into the per-workspace structure."""
-    if _dry_run:
-        return
-    full = load_full_state()
-    workspace = state.get("workspace") or full.get("current_workspace")
-    if workspace:
-        full["current_workspace"] = workspace
-        full["workspaces"][workspace] = hydrate_state(state)
-    try:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps(full, indent=2), encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Failed to write state file: {STATE_PATH}") from exc
-
-
-
-def hydrate_state(state: dict) -> dict:
-    if not isinstance(state, dict):
-        return {}
-
-    hydrated = dict(state)
-    managed_configs = hydrated.get("managed_configs")
-    if not isinstance(managed_configs, dict):
-        managed_configs = {}
-    normalized: dict[str, dict] = {}
-    for tool, entry in managed_configs.items():
-        if isinstance(entry, dict):
-            keys = entry.get("keys") if isinstance(entry.get("keys"), list) else []
-            normalized[tool] = {"keys": keys}
-        elif entry:
-            normalized[tool] = {"keys": []}
-    hydrated["managed_configs"] = normalized
-
-    workspace = hydrated.get("workspace")
-    if workspace:
-        use_ai_gateway_v2 = bool(hydrated.get("use_ai_gateway_v2"))
-        hydrated["base_urls"] = build_shared_base_urls(workspace, use_ai_gateway_v2)
-    else:
-        hydrated["base_urls"] = {}
-
-    return hydrated
-
-
-def clear_state() -> None:
-    """Remove the current workspace entry from state."""
-    full = load_full_state()
-    workspace = full.get("current_workspace")
-    if workspace:
-        full.get("workspaces", {}).pop(workspace, None)
-        full["current_workspace"] = None
-    try:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps(full, indent=2), encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Failed to clear state file: {STATE_PATH}") from exc
-
-
-def ensure_parent_dir(path: Path) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise RuntimeError(f"Failed to create directory for {path}") from exc
-
-
-def backup_existing_file(config_path: Path, backup_path: Path) -> bool:
-    if _dry_run:
-        return False
-    try:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        if backup_path.exists():
-            return True
-        if not config_path.exists():
-            return False
-        backup_path.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
-        return True
-    except OSError as exc:
-        raise RuntimeError(f"Failed to back up config from {config_path}") from exc
-
-
-def restore_file(config_path: Path, backup_path: Path, managed: bool) -> bool:
-    try:
-        if backup_path.exists():
-            ensure_parent_dir(config_path)
-            config_path.write_text(backup_path.read_text(encoding="utf-8"), encoding="utf-8")
-            backup_path.unlink()
-            return True
-        if managed and config_path.exists():
-            config_path.unlink()
-            return True
-        return False
-    except OSError as exc:
-        raise RuntimeError(f"Failed to restore config at {config_path}") from exc
-
-
-def write_text_file(path: Path, content: str) -> None:
-    if _dry_run:
-        console.print(f"\n[bold]\\[dry run] {path}[/bold]\n{content}")
-        return
-    ensure_parent_dir(path)
-    try:
-        path.write_text(content, encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Failed to write config file: {path}") from exc
-
-
-def write_json_file(path: Path, payload: dict) -> None:
-    content = json.dumps(payload, indent=2) + "\n"
-    if _dry_run:
-        console.print(f"\n[bold]\\[dry run] {path}[/bold]\n{content}")
-        return
-    ensure_parent_dir(path)
-    try:
-        path.write_text(content, encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Failed to write config file: {path}") from exc
-
-
-def deep_merge_dict(base: dict, overlay: dict) -> dict:
-    """Recursively merge overlay into base; overlay wins for conflicting leaves.
-
-    Mutates and returns base. Nested dicts are merged; everything else is replaced.
-    """
-    for key, value in overlay.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            deep_merge_dict(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def read_json_safe(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def read_toml_safe(path: Path) -> tomlkit.TOMLDocument:
-    if not path.exists():
-        return tomlkit.document()
-    try:
-        return tomlkit.parse(path.read_text(encoding="utf-8"))
-    except (OSError, tomlkit.exceptions.TOMLKitError):
-        return tomlkit.document()
-
-
-def write_toml_file(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    content = tomlkit.dumps(doc)
-    if _dry_run:
-        console.print(f"\n[bold]\\[dry run] {path}[/bold]\n{content}")
-        return
-    ensure_parent_dir(path)
-    try:
-        path.write_text(content, encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Failed to write config file: {path}") from exc
-
-
-def parse_dotenv(path: Path) -> dict[str, str]:
-    """Parse a simple KEY=VALUE / KEY=\"VALUE\" .env file, preserving insertion order.
-
-    Comments and blank lines are dropped on round-trip. Lines that don't look like
-    KEY=... are skipped.
-    """
-    if not path.exists():
-        return {}
-    env: dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if not key:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
-        env[key] = value
-    return env
-
-
-def write_dotenv(path: Path, env: dict[str, str]) -> None:
-    content = "".join(f'{key}="{value}"\n' for key, value in env.items())
-    write_text_file(path, content)
-
-
-def install_databricks_cli() -> None:
-    if shutil.which("databricks"):
-        return
-
-    system = platform.system()
-    print_section("Bootstrap")
-    print_warning("`databricks` was not found. Installing Databricks CLI...")
-
-    try:
-        if system == "Windows":
-            run(
-                [
-                    "powershell",
-                    "-Command",
-                    f"irm {WINDOWS_DATABRICKS_INSTALL_URL} | iex",
-                ],
-                timeout=240,
-            )
-        elif shutil.which("curl"):
-            run(
-                ["sh", "-c", f"curl -fsSL {UNIX_DATABRICKS_INSTALL_URL} | sh"],
-                timeout=240,
-            )
-        elif shutil.which("wget"):
-            run(
-                ["sh", "-c", f"wget -qO- {UNIX_DATABRICKS_INSTALL_URL} | sh"],
-                timeout=240,
-            )
-        else:
-            raise RuntimeError("Neither curl nor wget is available.")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
-        raise RuntimeError("Failed to install Databricks CLI automatically.") from exc
-
-    if not shutil.which("databricks"):
-        raise RuntimeError(
-            "Databricks CLI install completed, but `databricks` is still not on PATH."
-        )
-
-
-def install_tool_binary(tool: str) -> None:
-    spec = TOOL_SPECS[tool]
-    binary = spec["binary"]
-    package = spec["package"]
-
-    if shutil.which(binary):
-        return
-
-    if not shutil.which("npm"):
-        raise RuntimeError(
-            f"`{binary}` is not installed and npm is not available to install it."
-        )
-
-    print_section("Bootstrap")
-    print_warning(f"`{binary}` was not found. Installing {spec['display']}...")
-    try:
-        run(["npm", "install", "-g", package], timeout=300)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"Failed to install {spec['display']} automatically.") from exc
-
-    if not shutil.which(binary):
-        raise RuntimeError(
-            f"{spec['display']} install completed, but `{binary}` is still not on PATH."
-        )
-
-
-def ensure_bootstrap_dependencies(tool: str) -> None:
-    install_databricks_cli()
-    install_tool_binary(tool)
-
-
-def has_valid_databricks_auth(workspace: str) -> bool:
-    try:
-        env = build_databricks_cli_env(workspace)
-        result = run(
-            ["databricks", "auth", "token", "--host", workspace, "--output", "json"],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return False
-        data = json.loads(result.stdout or "{}")
-        return bool(data.get("access_token"))
-    except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def find_profile_name_for_host(workspace: str) -> str | None:
-    """Find the Databricks CLI profile name matching a workspace URL."""
-    normalized = workspace.rstrip("/")
-    for host, name in get_databricks_profiles():
-        if host == normalized:
-            return name
-    return None
-
-
-def run_databricks_login(workspace: str) -> None:
-    """Run databricks auth login unconditionally."""
-    print_section("Databricks Login")
-    print_kv("Workspace", workspace)
-    print_note("A browser may open for `databricks auth login`.")
-    try:
-        cmd = ["databricks", "auth", "login", "--host", workspace]
-        profile_name = find_profile_name_for_host(workspace)
-        if profile_name:
-            cmd += ["--profile", profile_name]
-        run(cmd, env=build_databricks_cli_env(workspace), timeout=300)
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError("`databricks auth login` failed.") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("`databricks auth login` timed out.") from exc
-    print_success("Databricks authentication complete")
-
-
-def ensure_databricks_auth(workspace: str) -> None:
-    """Check auth and login only if needed (used by launch path)."""
-    with spinner("Checking Databricks auth..."):
-        auth_is_valid = has_valid_databricks_auth(workspace)
-    if auth_is_valid:
-        print_success(f"Databricks auth already available for {workspace}")
-        return
-    run_databricks_login(workspace)
-
-
-def fetch_ai_gateway_claude_models(workspace: str, token: str) -> dict[str, str]:
-    hostname = workspace_hostname(workspace)
-    request = urllib_request.Request(
-        f"https://{hostname}/ai-gateway/anthropic/v1/models",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urllib_request.urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError):
-        return {}
-
-    models = [
-        m["id"] for m in data.get("data", [])
-        if isinstance(m.get("id"), str) and not m["id"].endswith("-anthropic")
-    ]
-
-    result = {}
-    for family, key in [("opus", "opus"), ("sonnet", "sonnet"), ("haiku", "haiku")]:
-        candidates = sorted(
-            [m for m in models if f"databricks-claude-{family}-" in m],
-            reverse=True,
-        )
-        if candidates:
-            result[key] = candidates[0]
-    return result
-
-
-def fetch_gemini_models(workspace: str, token: str) -> list[str]:
-    """Return Gemini model names from serving-endpoints:foundation-models."""
-    hostname = workspace_hostname(workspace)
-    request = urllib_request.Request(
-        f"https://{hostname}/api/2.0/serving-endpoints:foundation-models",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urllib_request.urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError):
-        return []
-
-    gemini: list[str] = []
-    for ep in data.get("endpoints", []):
-        name = ep.get("name", "")
-        entities = ep.get("config", {}).get("served_entities", [])
-        api_types: set[str] = set()
-        for se in entities:
-            fm = se.get("foundation_model", {})
-            if fm.get("ai_gateway_v2_supported") is True:
-                api_types.update(fm.get("api_types", []))
-        if "gemini/v1/generateContent" in api_types:
-            gemini.append(name)
-
-    return sorted(gemini)
-
-
-def fetch_codex_models(workspace: str, token: str) -> list[str]:
-    """Return Codex/OpenAI model names from serving-endpoints:foundation-models."""
-    hostname = workspace_hostname(workspace)
-    request = urllib_request.Request(
-        f"https://{hostname}/api/2.0/serving-endpoints:foundation-models",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urllib_request.urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError):
-        return []
-
-    codex: list[str] = []
-    for ep in data.get("endpoints", []):
-        name = ep.get("name", "")
-        entities = ep.get("config", {}).get("served_entities", [])
-        api_types: set[str] = set()
-        for se in entities:
-            fm = se.get("foundation_model", {})
-            if fm.get("ai_gateway_v2_supported") is True:
-                api_types.update(fm.get("api_types", []))
-        if "openai/v1/responses" in api_types:
-            codex.append(name)
-
-    return sorted(codex)
-
-
-def detect_ai_gateway_v2(workspace: str, token: str) -> bool:
-    hostname = workspace_hostname(workspace)
-    request = urllib_request.Request(
-        f"https://{hostname}/ai-gateway/anthropic/v1/messages",
-        method="HEAD",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    try:
-        urllib_request.urlopen(request, timeout=10)
-        return True
-    except urllib_error.HTTPError as exc:
-        return exc.code != 404
-    except urllib_error.URLError:
-        return False
-
-
-def get_databricks_token(workspace: str) -> str:
-    try:
-        env = build_databricks_cli_env(workspace)
-        result = run(
-            ["databricks", "auth", "token", "--host", workspace, "--output", "json"],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=15,
-        )
-        data = json.loads(result.stdout or "{}")
-        token = data.get("access_token")
-        if not token:
-            raise RuntimeError("Databricks CLI returned no access token.")
-        return token
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        raise RuntimeError("Failed to retrieve Databricks access token.") from exc
-
-
-def discover_sql_warehouse_http_path(
-    workspace: str,
-    token: str,
-    *,
-    quiet: bool = False,
-) -> str:
-    hostname = workspace_hostname(workspace)
-    request = urllib_request.Request(
-        f"https://{hostname}/api/2.0/sql/warehouses",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        },
-    )
-
-    try:
-        with urllib_request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib_error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        detail = body.strip() or f"HTTP {exc.code}"
-        raise RuntimeError(f"Failed to list SQL warehouses: {detail}") from exc
-    except urllib_error.URLError as exc:
-        raise RuntimeError(f"Could not reach workspace hostname {hostname}: {exc.reason}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Databricks warehouse discovery returned invalid JSON.") from exc
-
-    warehouses = payload.get("warehouses")
-    if not isinstance(warehouses, list) or not warehouses:
-        raise RuntimeError(
-            "No SQL warehouses found in this workspace. Create one or pass `--http-path`."
-        )
-
-    running = [item for item in warehouses if isinstance(item, dict) and item.get("state") == "RUNNING"]
-    chosen = running[0] if running else next(
-        (item for item in warehouses if isinstance(item, dict) and item.get("id")),
-        None,
-    )
-    if not chosen:
-        raise RuntimeError("No usable SQL warehouse was returned by Databricks.")
-
-    warehouse_id = chosen.get("id")
-    if not isinstance(warehouse_id, str) or not warehouse_id.strip():
-        raise RuntimeError("Databricks returned a warehouse without an ID.")
-
-    warehouse_name = chosen.get("name")
-    warehouse_state = chosen.get("state", "UNKNOWN")
-    label_value = warehouse_name if isinstance(warehouse_name, str) and warehouse_name else warehouse_id
-    if not quiet:
-        print_note(f"Using SQL warehouse `{label_value}` ({warehouse_state}).")
-    return f"/sql/1.0/warehouses/{warehouse_id}"
-
-
-def run_usage_query(
-    workspace: str,
-    http_path: str,
-    token: str,
-    query: str,
-) -> tuple[list[str], list[tuple]]:
-    try:
-        logging.getLogger("databricks.sql").setLevel(logging.ERROR)
-        from databricks import sql
-    except ImportError as exc:
-        raise RuntimeError(
-            "`databricks-sql-connector` is not installed. Install it with `pip install databricks-sql-connector`."
-        ) from exc
-
-    try:
-        with sql.connect(
-            server_hostname=workspace_hostname(workspace),
-            http_path=http_path,
-            access_token=token,
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(query)
-                columns = [desc[0] for desc in (cursor.description or [])]
-                rows = cursor.fetchall()
-    except Exception as exc:
-        raise RuntimeError(f"Usage query failed: {exc}") from exc
-
-    return columns, rows
-
-
-def build_usage_report_query() -> str:
-    return f"""
-SELECT
-  current_user() AS requester_name,
-  CASE
-    WHEN lower(user_agent) LIKE '%codex%' THEN 'codex'
-    WHEN lower(user_agent) LIKE '%claude%' THEN 'claude'
-    WHEN lower(user_agent) LIKE '%gemini%' THEN 'gemini'
-    WHEN lower(user_agent) LIKE '%opencode%' THEN 'opencode'
-    ELSE 'other'
-  END AS tool,
-  date(event_time) AS usage_day,
-  SUM(COALESCE(total_tokens, 0)) AS total_tokens_used,
-  COUNT(DISTINCT request_id) AS sessions,
-  MIN(event_time) AS first_event_time,
-  MAX(event_time) AS last_event_time,
-  CONCAT_WS(', ', SORT_ARRAY(COLLECT_SET(destination_model))) AS models
-FROM system.ai_gateway.usage
-WHERE event_time >= current_timestamp() - interval {USAGE_SUMMARY_DAYS} days
-  AND requester = current_user()
-  AND (
-    lower(user_agent) LIKE '%codex%'
-    OR lower(user_agent) LIKE '%claude%'
-    OR lower(user_agent) LIKE '%gemini%'
-    OR lower(user_agent) LIKE '%opencode%'
-  )
-GROUP BY 1, 2, 3
-ORDER BY usage_day DESC, tool ASC
-""".strip()
-
-
-def build_current_user_query() -> str:
-    return "SELECT current_user() AS requester_name"
-
-
-def parse_usage_rows(columns: list[str], rows: list[tuple]) -> list[dict[str, object]]:
-    return [dict(zip(columns, row)) for row in rows]
-
-
-def coerce_date(value_obj: object) -> date | None:
-    if isinstance(value_obj, date) and not isinstance(value_obj, datetime):
-        return value_obj
-    if isinstance(value_obj, datetime):
-        return value_obj.date()
-    if isinstance(value_obj, str):
-        try:
-            return datetime.fromisoformat(value_obj).date()
-        except ValueError:
-            return None
-    return None
-
-
-def coerce_datetime(value_obj: object) -> datetime | None:
-    if isinstance(value_obj, datetime):
-        return value_obj
-    if isinstance(value_obj, str):
-        candidate = value_obj.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(candidate)
-        except ValueError:
-            return None
-    return None
-
-
-def format_token_count(token_count: int) -> str:
-    value_float = float(token_count)
-    if token_count >= 1_000_000_000:
-        return f"{value_float / 1_000_000_000:.1f}B"
-    if token_count >= 1_000_000:
-        return f"{value_float / 1_000_000:.1f}M"
-    if token_count >= 1_000:
-        return f"{value_float / 1_000:.1f}K"
-    return str(token_count)
-
-
-def format_duration(duration_value: timedelta | None) -> str:
-    if not duration_value or duration_value.total_seconds() <= 0:
-        return "-"
-    total_minutes = duration_value.total_seconds() / 60
-    if total_minutes < 60:
-        return f"{int(round(total_minutes))}m"
-    total_hours = total_minutes / 60
-    if total_hours < 10:
-        return f"{total_hours:.1f}h"
-    if total_hours < 24:
-        return f"{round(total_hours):.0f}h"
-    return f"{total_hours / 24:.1f}d"
-
-
-def simplify_model_name(tool: str, model_name: str) -> str:
-    normalized = (model_name or "").strip()
-    if not normalized:
-        return "-"
-
-    prefix = "databricks-"
-    if normalized.startswith(prefix):
-        normalized = normalized[len(prefix):]
-
-    tool_prefixes = {
-        "claude": "claude-",
-        "gemini": "gemini-",
-        "codex": "gpt-",
-    }
-    tool_prefix = tool_prefixes.get(tool)
-    if tool_prefix and normalized.startswith(tool_prefix):
-        normalized = normalized[len(tool_prefix):]
-    return normalized
-
-
-def summarize_models(tool: str, raw_models: object) -> str:
-    if not isinstance(raw_models, str) or not raw_models.strip():
-        return "-"
-    parts = extract_model_names(tool, raw_models)
-    return ", ".join(parts) if parts else "-"
-
-
-def extract_model_names(tool: str, raw_models: object) -> list[str]:
-    if not isinstance(raw_models, str) or not raw_models.strip():
-        return []
-
-    unique_models: list[str] = []
-    for item in raw_models.split(","):
-        simplified = simplify_model_name(tool, item.strip())
-        if simplified != "-" and simplified not in unique_models:
-            unique_models.append(simplified)
-    return unique_models
-
-
-def render_box_table(headers: list[str], rows: list[list[str]], max_widths: list[int] | None = None) -> str:
-    wrapped_rows: list[list[list[str]]] = []
-    widths = [len(header) for header in headers]
-
-    for row in rows:
-        wrapped_row: list[list[str]] = []
-        for index, cell in enumerate(row):
-            raw_cell = cell if cell else "-"
-            width_limit = max_widths[index] if max_widths and index < len(max_widths) else None
-            if width_limit:
-                cell_lines = textwrap.wrap(raw_cell, width=width_limit) or ["-"]
-            else:
-                cell_lines = raw_cell.splitlines() or ["-"]
-            wrapped_row.append(cell_lines)
-            widths[index] = max(widths[index], max(len(line) for line in cell_lines))
-        wrapped_rows.append(wrapped_row)
-
-    top = "┏" + "┳".join("━" * (width + 2) for width in widths) + "┓"
-    header = "┃ " + " ┃ ".join(headers[index].ljust(widths[index]) for index in range(len(headers))) + " ┃"
-    middle = "┡" + "╇".join("━" * (width + 2) for width in widths) + "┩"
-    bottom = "└" + "┴".join("─" * (width + 2) for width in widths) + "┘"
-
-    body_lines: list[str] = []
-    for wrapped_row in wrapped_rows:
-        row_height = max(len(cell_lines) for cell_lines in wrapped_row)
-        for line_index in range(row_height):
-            body_lines.append(
-                "│ "
-                + " │ ".join(
-                    (
-                        wrapped_row[column_index][line_index]
-                        if line_index < len(wrapped_row[column_index])
-                        else ""
-                    ).ljust(widths[column_index])
-                    for column_index in range(len(headers))
-                )
-                + " │"
-            )
-
-    return "\n".join([top, header, middle, *body_lines, bottom])
-
-
-def empty_tool_day(tool: str, usage_day: date) -> dict[str, object]:
-    return {
-        "tool": tool,
-        "usage_day": usage_day,
-        "total_tokens_used": 0,
-        "sessions": 0,
-        "first_event_time": None,
-        "last_event_time": None,
-        "models": "-",
-    }
-
-
-def build_tool_breakdown_rows(records: list[dict[str, object]], tool: str) -> list[list[str]]:
-    today = date.today()
-    rows_by_day: dict[date, dict[str, object]] = {}
-    for record in records:
-        if record.get("tool") != tool:
-            continue
-        usage_day = coerce_date(record.get("usage_day"))
-        if usage_day:
-            rows_by_day[usage_day] = record
-
-    rendered_rows: list[list[str]] = []
-    for day_offset in range(USAGE_BREAKDOWN_DAYS):
-        usage_day = today - timedelta(days=day_offset)
-        record = rows_by_day.get(usage_day) or empty_tool_day(tool, usage_day)
-        first_event_time = coerce_datetime(record.get("first_event_time"))
-        last_event_time = coerce_datetime(record.get("last_event_time"))
-        duration = None
-        if first_event_time and last_event_time:
-            duration = last_event_time - first_event_time
-        token_total = int(record.get("total_tokens_used") or 0)
-        session_total = int(record.get("sessions") or 0)
-        rendered_rows.append(
-            [
-                usage_day.strftime("%m-%d"),
-                usage_day.strftime("%a"),
-                format_token_count(token_total) if token_total else "-",
-                str(session_total) if session_total else "-",
-                format_duration(duration),
-                summarize_models(tool, record.get("models")),
-            ]
-        )
-
-    return rendered_rows
-
-
-def find_requester_name(
-    workspace: str,
-    http_path: str,
-    token: str,
-    records: list[dict[str, object]],
-) -> str:
-    for record in records:
-        requester_name = record.get("requester_name")
-        if isinstance(requester_name, str) and requester_name.strip():
-            return requester_name.strip()
-
-    columns, rows = run_usage_query(workspace, http_path, token, build_current_user_query())
-    parsed_rows = parse_usage_rows(columns, rows)
-    if parsed_rows:
-        requester_name = parsed_rows[0].get("requester_name")
-        if isinstance(requester_name, str) and requester_name.strip():
-            return requester_name.strip()
-    return "current user"
-
-
-def render_usage_summary(
-    records: list[dict[str, object]],
-    requester_name: str,
-) -> str:
-    today = date.today()
-    week_start = today - timedelta(days=USAGE_BREAKDOWN_DAYS - 1)
-    month_start = today - timedelta(days=USAGE_SUMMARY_DAYS - 1)
-
-    daily_total = 0
-    weekly_total = 0
-    monthly_total = 0
-    active_tools_last_week: list[str] = []
-    weekly_model_tokens: dict[str, int] = {}
-    for record in records:
-        usage_day = coerce_date(record.get("usage_day"))
-        if not usage_day:
-            continue
-        token_total = int(record.get("total_tokens_used") or 0)
-        tool = record.get("tool")
-        if usage_day >= month_start:
-            monthly_total += token_total
-        if usage_day >= week_start:
-            weekly_total += token_total
-            if isinstance(tool, str) and tool in TOOL_SPECS and tool not in active_tools_last_week:
-                active_tools_last_week.append(tool)
-            if isinstance(tool, str):
-                for model_name in extract_model_names(tool, record.get("models")):
-                    weekly_model_tokens[model_name] = (
-                        weekly_model_tokens.get(model_name, 0) + token_total
-                    )
-        if usage_day == today:
-            daily_total += token_total
-
-    lines = [
-        heading(f"Usage Summary for {requester_name}"),
-        "",
-        "[bold green]✓[/bold green] Databricks AI Gateway usage",
-        f"{label('Today:')} {value(format_token_count(daily_total) + ' tokens')}",
-        f"{label('Last 7 days:')} {value(format_token_count(weekly_total) + ' tokens')}",
-        f"{label('Last 30 days:')} {value(format_token_count(monthly_total) + ' tokens')}",
-    ]
-    if active_tools_last_week:
-        tool_text = ", ".join(TOOL_SPECS[tool]["display"] for tool in active_tools_last_week)
-        lines.append(f"{label('Active tools:')} {value(tool_text)}")
-    if weekly_model_tokens:
-        top_models = sorted(
-            weekly_model_tokens.items(),
-            key=lambda item: (-item[1], item[0].lower()),
-        )[:3]
-        models_text = ", ".join(
-            f"{model_name} ({format_token_count(token_total)})"
-            for model_name, token_total in top_models
-        )
-        lines.append(f"{label('Top models this week:')} {value(models_text)}")
-    return "\n".join(lines)
-
-
-def build_auth_shell_command(workspace: str) -> str:
-    python_expr = "import json,sys; print(json.load(sys.stdin).get('access_token', ''))"
-    unset_prefix = " ".join(f"-u {key}" for key in SCRUBBED_DATABRICKS_ENV_VARS)
-    return (
-        f"env {unset_prefix} databricks auth token --host {workspace} --output json "
-        f'| python3 -c "{python_expr}"'
-    )
-
-
-def build_tool_base_url(
-    tool: str,
-    workspace: str,
-    use_ai_gateway_v2: bool,
-) -> str:
-    if tool == "codex":
-        return (
-            f"{workspace}/ai-gateway/codex/v1"
-            if use_ai_gateway_v2
-            else f"{workspace}/serving-endpoints/codex/v1"
-        )
-    if tool == "claude":
-        return (
-            f"{workspace}/ai-gateway/anthropic"
-            if use_ai_gateway_v2
-            else f"{workspace}/serving-endpoints/anthropic"
-        )
-    if tool == "gemini":
-        return (
-            f"{workspace}/ai-gateway/gemini"
-            if use_ai_gateway_v2
-            else f"{workspace}/serving-endpoints/gemini"
-        )
-    if tool == "opencode":
-        raise RuntimeError("OpenCode has multiple base URLs — use build_opencode_base_urls() instead.")
-    raise RuntimeError(f"Unsupported tool '{tool}'.")
-
-
-def build_opencode_base_urls(workspace: str, use_ai_gateway_v2: bool) -> dict[str, str]:
-    return {
-        "anthropic": build_tool_base_url("claude", workspace, use_ai_gateway_v2) + "/v1",
-        "gemini": build_tool_base_url("gemini", workspace, use_ai_gateway_v2) + "/v1beta",
-    }
-
-
-def build_shared_base_urls(
-    workspace: str,
-    use_ai_gateway_v2: bool,
-) -> dict[str, str | dict[str, str]]:
-    urls: dict[str, str | dict[str, str]] = {
-        tool: build_tool_base_url(tool, workspace, use_ai_gateway_v2)
-        for tool in TOOL_SPECS
-        if tool != "opencode"
-    }
-    urls["opencode"] = build_opencode_base_urls(workspace, use_ai_gateway_v2)
-    return urls
-
-
-
-
-def default_model_for_tool(tool: str, state: dict) -> str | None:
-    """Pick a sensible default model from the fetched model lists."""
-    if tool == "claude":
-        claude_models = state.get("claude_models") or {}
-        return claude_models.get("sonnet") or claude_models.get("opus") or claude_models.get("haiku")
-    elif tool == "opencode":
-        opencode_models = state.get("opencode_models") or {}
-        anthropic = opencode_models.get("anthropic") or []
-        if anthropic:
-            return anthropic[0]
-        gemini = opencode_models.get("gemini") or []
-        return gemini[0] if gemini else None
-    elif tool == "gemini":
-        gemini_models = state.get("gemini_models") or []
-        return gemini_models[0] if gemini_models else None
-    return None
-
-
-def resolve_launch_model(
-    tool: str,
-    state: dict,
-    explicit_model: str | None,
-) -> tuple[dict, str | None]:
-    if tool == "codex":
-        return state, None
-
-    model = explicit_model or default_model_for_tool(tool, state)
-    if not model:
-        raise RuntimeError(f"No models available for {tool}. Run `coding-gateway configure` to set up your workspace.")
-    return state, model
-
-
-CODEX_MANAGED_KEYS: list[list[str]] = [
-    ["profile"],
-    ["profiles", "default", "model_provider"],
-    ["model_providers", "Databricks"],
-]
-
-
-def render_codex_overlay(workspace: str, use_ai_gateway_v2: bool) -> dict:
-    auth_command = build_auth_shell_command(workspace)
-    base_url = build_tool_base_url("codex", workspace, use_ai_gateway_v2)
-    return {
-        "profile": "default",
-        "profiles": {"default": {"model_provider": "Databricks"}},
-        "model_providers": {
-            "Databricks": {
-                "name": "Databricks AI Gateway",
-                "base_url": base_url,
-                "wire_api": "responses",
-                "auth": {
-                    "command": "sh",
-                    "args": ["-c", auth_command],
-                    "timeout_ms": 5000,
-                    "refresh_interval_ms": 1800000,
-                },
-            }
-        },
-    }
-
-
-def render_claude_overlay(
-    workspace: str,
-    use_ai_gateway_v2: bool,
-    model: str,
-    claude_models: dict[str, str] | None = None,
-) -> tuple[dict, list[list[str]]]:
-    """Return (overlay, managed_key_paths) for Claude settings.json."""
-    base_url = build_tool_base_url("claude", workspace, use_ai_gateway_v2)
-    env: dict[str, str] = {
-        "ANTHROPIC_MODEL": model,
-        "ANTHROPIC_BASE_URL": base_url,
-        "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true",
-        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-        "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "1800000",
-    }
-    if claude_models:
-        if claude_models.get("opus"):
-            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = claude_models["opus"]
-        if claude_models.get("sonnet"):
-            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = claude_models["sonnet"]
-        if claude_models.get("haiku"):
-            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = claude_models["haiku"]
-    overlay = {"apiKeyHelper": build_auth_shell_command(workspace), "env": env}
-    keys: list[list[str]] = [["apiKeyHelper"]] + [["env", k] for k in env]
-    return overlay, keys
-
-
-GEMINI_MANAGED_KEYS: list[str] = [
-    "GEMINI_MODEL",
-    "GOOGLE_GEMINI_BASE_URL",
-    "GEMINI_API_KEY_AUTH_MECHANISM",
-    "GEMINI_API_KEY",
-]
-
-
-def render_gemini_env_overlay(
-    workspace: str,
-    use_ai_gateway_v2: bool,
-    model: str,
-    token: str,
-) -> dict[str, str]:
-    base_url = build_tool_base_url("gemini", workspace, use_ai_gateway_v2)
-    return {
-        "GEMINI_MODEL": model,
-        "GOOGLE_GEMINI_BASE_URL": base_url,
-        "GEMINI_API_KEY_AUTH_MECHANISM": "bearer",
-        "GEMINI_API_KEY": token,
-    }
-
-
-OPENCODE_PROVIDER_KEYS: list[list[str]] = [
-    ["provider", "databricks-anthropic"],
-    ["provider", "databricks-google"],
-]
-
-
-def render_opencode_overlay(
-    model: str,
-    token: str,
-    opencode_base_urls: dict[str, str],
-    opencode_models: dict[str, list[str]],
-) -> tuple[dict, list[list[str]]]:
-    """Return (overlay, managed_key_paths) for opencode.json."""
-    auth_headers = {"Authorization": f"Bearer {token}"}
-
-    anthropic_models = opencode_models.get("anthropic") or []
-    gemini_models = opencode_models.get("gemini") or []
-
-    providers: dict = {}
-    keys: list[list[str]] = [["model"]]
-    if anthropic_models:
-        providers["databricks-anthropic"] = {
-            "npm": "@ai-sdk/anthropic",
-            "options": {
-                "baseURL": opencode_base_urls["anthropic"],
-                "apiKey": token,
-                "headers": auth_headers,
-            },
-            "models": {m: {} for m in anthropic_models},
-        }
-        keys.append(["provider", "databricks-anthropic"])
-    if gemini_models:
-        providers["databricks-google"] = {
-            "npm": "@ai-sdk/google",
-            "options": {
-                "baseURL": opencode_base_urls["gemini"],
-                "apiKey": token,
-                "headers": auth_headers,
-            },
-            "models": {m: {} for m in gemini_models},
-        }
-        keys.append(["provider", "databricks-google"])
-
-    overlay: dict = {"model": model}
-    if providers:
-        overlay["provider"] = providers
-    return overlay, keys
-
-
-def build_gemini_runtime_env(
-    workspace: str,
-    use_ai_gateway_v2: bool,
-    model: str,
-    token: str,
-) -> dict[str, str]:
-    env = os.environ.copy()
-    env["GEMINI_MODEL"] = model
-    env["GOOGLE_GEMINI_BASE_URL"] = build_tool_base_url("gemini", workspace, use_ai_gateway_v2)
-    env["GEMINI_API_KEY_AUTH_MECHANISM"] = "bearer"
-    env["GEMINI_API_KEY"] = token
-    return env
-
-
-def get_databricks_profiles() -> list[tuple[str, str]]:
-    """Return [(host_url, profile_name), ...] from Databricks CLI profiles."""
-    try:
-        result = run(
-            ["databricks", "auth", "profiles", "--output", "json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return []
-        data = json.loads(result.stdout or "{}")
-        profiles = data.get("profiles") or []
-        seen: set[str] = set()
-        result = []
-        for p in profiles:
-            host = p.get("host", "").rstrip("/")
-            if host and host not in seen and p.get("auth_type") != "pat":
-                seen.add(host)
-                result.append((host, p["name"]))
-        return result
-    except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, KeyError):
-        return []
-
-
-def prompt_for_workspace(description: str = "Enter your Databricks workspace URL") -> str:
-    console.print()
-    console.print(Panel(description, title="coding-gateway Setup", style="bold blue", expand=False))
-
-    profiles = get_databricks_profiles()
-    if profiles:
-        choices = [
-            questionary.Choice(title=host, value=host)
-            for host, name in profiles
-        ]
-        choices.append(questionary.Choice(title="Enter a different URL", value="__manual__"))
-        style = questionary.Style([
-            ("highlighted", "fg:cyan bold"),
-            ("pointer", "fg:cyan bold"),
-            ("answer", "fg:cyan"),
-        ])
-        choice = questionary.select(
-            "Select workspace:", choices=choices, style=style, pointer="›", qmark=""
-        ).ask()
-        if choice is not None and choice != "__manual__":
-            return normalize_workspace_url(choice)
-
-    while True:
-        raw_value = console.input(f"  [bold]Workspace URL[/bold] {muted('›')} ").strip()
-        try:
-            return normalize_workspace_url(raw_value)
-        except ValueError as exc:
-            print_err(str(exc))
-
-
-def prompt_yes_no(prompt: str) -> bool:
-    while True:
-        response = console.input(f"{label(prompt)} {muted('[y/n]')} {muted('›')} ").strip().lower()
-        if response in {"y", "yes"}:
-            return True
-        if response in {"n", "no"}:
-            return False
-        print_err("Please answer yes or no.")
-
-
-def prompt_for_choice(prompt: str, options: list[tuple[str, str]]) -> str:
-    console.print()
-    for index, (_, option_label) in enumerate(options, start=1):
-        console.print(f"  [bold]{index}.[/bold] [cyan]{option_label}[/cyan]")
-
-    while True:
-        raw_value = console.input(f"{label(prompt)} {muted('›')} ").strip()
-        if raw_value.isdigit():
-            selected_index = int(raw_value)
-            if 1 <= selected_index <= len(options):
-                return options[selected_index - 1][0]
-        print_err("Please enter a valid option number.")
-
-
-def prompt_for_client_id() -> str:
-    while True:
-        client_id = console.input(
-            f"{label('OAuth client ID')} {muted('›')} "
-        ).strip()
-        if client_id:
-            return client_id
-        print_err("Client ID cannot be empty.")
-
-
-def prompt_for_client_secret() -> str:
-    while True:
-        client_secret = console.input(
-            f"{label('OAuth client secret')} {muted('›')} "
-        ).strip()
-        if client_secret:
-            return client_secret
-        print_err("Client secret cannot be empty.")
-
-
-def prompt_for_configuration(tool: str | None = None) -> str:
+from coding_tool_gateway.mcp import configure_mcp_command
+from coding_tool_gateway.state import STATE_PATH, clear_state, load_state, save_state
+from coding_tool_gateway.ui import (
+    console,
+    heading,
+    print_err,
+    print_heading,
+    print_kv,
+    print_note,
+    print_section,
+    print_success,
+    prompt_for_workspace,
+    spinner,
+    status_badge,
+)
+from coding_tool_gateway.usage import usage as usage_report
+
+
+def _prompt_for_configuration(tool: str | None = None) -> str:
     if tool is None:
         desc = "Configure your Databricks workspace"
     else:
         desc = f"Configure {TOOL_SPECS[tool]['display']} to use your Databricks endpoint."
-    return prompt_for_workspace(desc)
-
-
-def mark_tool_managed(state: dict, tool: str, managed_keys: list) -> dict:
-    managed_configs = dict(state.get("managed_configs") or {})
-    managed_configs[tool] = {"keys": list(managed_keys)}
-    state["managed_configs"] = managed_configs
-    state["last_tool"] = tool
-    return state
+    profiles = get_databricks_profiles()
+    return prompt_for_workspace(desc, profiles)
 
 
 def configure_shared_state(workspace: str) -> dict:
+    """Log into Databricks, enforce AI Gateway v2, fetch model lists, persist state."""
     workspace = normalize_workspace_url(workspace)
     run_databricks_login(workspace)
-    with spinner("Detecting AI Gateway..."):
+    with spinner("Verifying AI Gateway V2..."):
         token = get_databricks_token(workspace)
-        use_ai_gateway_v2 = detect_ai_gateway_v2(workspace, token)
-    if use_ai_gateway_v2:
-        print_success("AI Gateway detected — using AI Gateway endpoints")
-        with spinner("Fetching available models..."):
-            claude_models = fetch_ai_gateway_claude_models(workspace, token)
-            gemini_models = fetch_gemini_models(workspace, token)
-            codex_models = fetch_codex_models(workspace, token)
-    else:
-        print_note("AI Gateway not detected — using workspace serving endpoints")
-        claude_models = {}
-        gemini_models = []
-        codex_models = []
+        ensure_ai_gateway_v2(workspace, token)
+    print_success("AI Gateway V2 detected")
+
+    with spinner("Fetching available models..."):
+        claude_models = fetch_ai_gateway_claude_models(workspace, token)
+        gemini_models = fetch_gemini_models(workspace, token)
+        codex_models = fetch_codex_models(workspace, token)
+
     opencode_models: dict[str, list[str]] = {}
     if claude_models:
         opencode_models["anthropic"] = list(claude_models.values())
     if gemini_models:
         opencode_models["gemini"] = gemini_models
+
     state = {
         "workspace": workspace,
-        "use_ai_gateway_v2": use_ai_gateway_v2,
         "claude_models": claude_models,
         "gemini_models": gemini_models,
         "codex_models": codex_models,
         "opencode_models": opencode_models,
-        "base_urls": build_shared_base_urls(workspace, use_ai_gateway_v2),
+        "base_urls": build_shared_base_urls(workspace),
     }
     save_state(state)
     return state
 
 
-def write_codex_tool_config(state: dict) -> dict:
-    backup_existing_file(CODEX_CONFIG_PATH, CODEX_BACKUP_PATH)
-    overlay = render_codex_overlay(
-        state["workspace"],
-        bool(state.get("use_ai_gateway_v2")),
-    )
-    doc = read_toml_safe(CODEX_CONFIG_PATH)
-    deep_merge_dict(doc, overlay)
-    write_toml_file(CODEX_CONFIG_PATH, doc)
-    state = mark_tool_managed(state, "codex", CODEX_MANAGED_KEYS)
-    save_state(state)
-    return state
-
-
-def write_claude_tool_config(state: dict, model: str) -> dict:
-    backup_existing_file(CLAUDE_SETTINGS_PATH, CLAUDE_BACKUP_PATH)
-    overlay, managed_keys = render_claude_overlay(
-        state["workspace"],
-        bool(state.get("use_ai_gateway_v2")),
-        model,
-        state.get("claude_models") or {},
-    )
-    existing = read_json_safe(CLAUDE_SETTINGS_PATH)
-    merged = deep_merge_dict(existing, overlay)
-    write_json_file(CLAUDE_SETTINGS_PATH, merged)
-    state = mark_tool_managed(state, "claude", managed_keys)
-    save_state(state)
-    return state
-
-
-def write_gemini_tool_config(state: dict, model: str, token: str | None = None) -> tuple[dict, str]:
-    backup_existing_file(GEMINI_ENV_PATH, GEMINI_BACKUP_PATH)
-    if token is None:
-        token = get_databricks_token(state["workspace"])
-    overlay = render_gemini_env_overlay(
-        state["workspace"],
-        bool(state.get("use_ai_gateway_v2")),
-        model,
-        token,
-    )
-    existing = parse_dotenv(GEMINI_ENV_PATH)
-    existing.update(overlay)
-    write_dotenv(GEMINI_ENV_PATH, existing)
-    state = mark_tool_managed(state, "gemini", GEMINI_MANAGED_KEYS)
-    save_state(state)
-    return state, token
-
-
-def write_opencode_tool_config(state: dict, model: str, token: str | None = None) -> tuple[dict, str]:
-    backup_existing_file(OPENCODE_CONFIG_PATH, OPENCODE_BACKUP_PATH)
-    if token is None:
-        token = get_databricks_token(state["workspace"])
-    opencode_base_urls = state.get("base_urls", {}).get("opencode") or build_opencode_base_urls(
-        state["workspace"], bool(state.get("use_ai_gateway_v2"))
-    )
-    overlay, managed_keys = render_opencode_overlay(
-        model,
-        token,
-        opencode_base_urls,
-        state.get("opencode_models") or {},
-    )
-    existing = read_json_safe(OPENCODE_CONFIG_PATH)
-    providers = existing.get("provider")
-    if isinstance(providers, dict):
-        for stale in ("databricks-anthropic", "databricks-google"):
-            providers.pop(stale, None)
-    merged = deep_merge_dict(existing, overlay)
-    write_json_file(OPENCODE_CONFIG_PATH, merged)
-    state = mark_tool_managed(state, "opencode", managed_keys)
-    save_state(state)
-    return state, token
-
-
-def refresh_gemini_token_once(state: dict) -> str:
-    model = default_model_for_tool("gemini", state)
-    if not model:
-        raise RuntimeError("No Gemini model is configured.")
-    _, token = write_gemini_tool_config(state, model)
-    return token
-
-
-def refresh_gemini_env_forever(state: dict, stop_event: threading.Event) -> None:
-    while not stop_event.wait(TOKEN_REFRESH_INTERVAL_SECONDS):
-        try:
-            refresh_gemini_token_once(state)
-        except RuntimeError:
-            continue
-
-
-def refresh_opencode_token_once(state: dict) -> str:
-    model = default_model_for_tool("opencode", state)
-    if not model:
-        raise RuntimeError("No OpenCode model is configured.")
-    _, token = write_opencode_tool_config(state, model)
-    return token
-
-
-def refresh_opencode_config_forever(state: dict, stop_event: threading.Event) -> None:
-    while not stop_event.wait(TOKEN_REFRESH_INTERVAL_SECONDS):
-        try:
-            refresh_opencode_token_once(state)
-        except RuntimeError:
-            continue
-
-
-def configure_tool(tool: str, state: dict, model: str | None = None) -> dict:
-    if tool == "codex":
-        return write_codex_tool_config(state)
-    if tool == "claude":
-        if not model:
-            raise RuntimeError("A Claude model must be selected before configuration.")
-        return write_claude_tool_config(state, model)
-    if tool == "gemini":
-        if not model:
-            raise RuntimeError("A Gemini model must be selected before configuration.")
-        state, _ = write_gemini_tool_config(state, model)
-        return state
-    if tool == "opencode":
-        if not model:
-            raise RuntimeError("An OpenCode model must be selected before configuration.")
-        state, _ = write_opencode_tool_config(state, model)
-        return state
-    raise RuntimeError(f"Unsupported tool '{tool}'.")
-
-
-def check_gateway_endpoint(state: dict, tool: str) -> bool:
-    """Check if a tool has models available based on state, or fall back to HEAD check."""
-    use_ai_gateway_v2 = bool(state.get("use_ai_gateway_v2"))
-    if use_ai_gateway_v2:
-        if tool == "claude":
-            return bool(state.get("claude_models"))
-        elif tool == "opencode":
-            return bool(state.get("opencode_models"))
-        elif tool == "codex":
-            return bool(state.get("codex_models"))
-        elif tool == "gemini":
-            return bool(state.get("gemini_models"))
-        return False
-    # Non-v2: fall back to HEAD check
-    workspace = state["workspace"]
-    token = get_databricks_token(workspace)
-    if tool == "opencode":
-        base_url = build_tool_base_url("claude", workspace, False)
-        url = f"{base_url}/v1/messages"
-    elif tool == "claude":
-        base_url = build_tool_base_url(tool, workspace, False)
-        url = f"{base_url}/v1/messages"
-    elif tool == "codex":
-        base_url = build_tool_base_url(tool, workspace, False)
-        url = f"{base_url}/responses"
-    elif tool == "gemini":
-        base_url = build_tool_base_url(tool, workspace, False)
-        url = f"{base_url}/v1beta/models"
-    else:
-        return False
-    req = urllib_request.Request(url, method="HEAD", headers={"Authorization": f"Bearer {token}"})
-    try:
-        urllib_request.urlopen(req, timeout=10)
-        return True
-    except urllib_error.HTTPError as exc:
-        return exc.code in (400, 401, 422)
-    except (urllib_error.URLError, OSError):
-        return False
-
-
-def configure_all_tools(state: dict) -> dict:
-    available_tools: list[str] = []
-    unavailable_tools: list[str] = []
-
-    for tool in TOOL_SPECS:
-        with spinner(f"Checking {TOOL_SPECS[tool]['display']} availability..."):
-            ok = check_gateway_endpoint(state, tool)
-        if ok:
-            available_tools.append(tool)
-        else:
-            unavailable_tools.append(tool)
-
-    for tool in unavailable_tools:
-        print_err(f"{TOOL_SPECS[tool]['display']} is not available on this workspace")
-
-    for tool in available_tools:
-        if tool == "codex":
-            state = configure_tool("codex", state, None)
-        else:
-            state, model = resolve_launch_model(tool, state, None)
-            state = configure_tool(tool, state, model)
-
-    state["available_tools"] = available_tools
-    save_state(state)
-    return state
-
-
-def ensure_provider_state(tool: str) -> dict:
-    state = load_state()
-    workspace = state.get("workspace")
-    if not workspace:
-        raise RuntimeError(
-            "No workspace configured. Run `coding-gateway configure` first."
-        )
-    available_tools = state.get("available_tools") or []
-    if tool not in available_tools:
-        raise RuntimeError(
-            f"{TOOL_SPECS[tool]['display']} is not available on this workspace. "
-            f"Run `coding-gateway configure` to set up your agents."
-        )
-    ensure_databricks_auth(workspace)
-    return state
-
-
-def validate_tool(tool: str) -> tuple[bool, str]:
-    """Invoke a tool with a simple prompt to verify it works. Returns (ok, error_msg)."""
-    spec = TOOL_SPECS[tool]
-    binary = spec["binary"]
-    if tool == "claude":
-        cmd = [binary, "-p", "say hi in 5 words or less", "--max-turns", "1"]
-    elif tool == "codex":
-        cmd = [binary, "exec", "say hi in 5 words or less"]
-    elif tool == "gemini":
-        cmd = [binary, "-p", "say hi in 5 words or less"]
-    elif tool == "opencode":
-        cmd = [binary, "run", "say hi in 5 words or less"]
-    else:
-        return False, "unsupported tool"
-    try:
-        result = run(cmd, check=False, capture_output=True, text=True, timeout=60)
-        if result.returncode == 0:
-            return True, ""
-        output = (result.stderr or result.stdout or "").strip()
-        for line in output.splitlines():
-            if "error" in line.lower() and ("message" in line.lower() or ":" in line):
-                msg = line.strip()
-                if "error_code" in msg:
-                    try:
-                        payload = json.loads(msg[msg.index("{"):msg.rindex("}") + 1])
-                        return False, payload.get("message", msg)
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                return False, msg
-        last_line = output.splitlines()[-1] if output else "unknown error"
-        return False, last_line
-    except OSError as exc:
-        return False, str(exc)
-    except subprocess.TimeoutExpired:
-        return False, "timed out"
-
-
-def validate_all_tools(state: dict) -> None:
-    console.print()
-    console.print(Panel("Testing each tool with a quick message...", title="Validating", style="bold blue", expand=False))
-    results: list[tuple[str, bool]] = []
-    available_tools = list(state.get("available_tools") or [])
-    for tool, spec in TOOL_SPECS.items():
-        if tool not in available_tools:
-            continue
-        with spinner(f"Validating {spec['display']}..."):
-            ok, err = validate_tool(tool)
-        results.append((tool, ok))
-        if ok:
-            print_success(f"{spec['display']} is working")
-        else:
-            print_err(f"{spec['display']}: {err}")
-            managed = bool(state.get("managed_configs", {}).get(tool))
-            restore_file(spec["config_path"], spec["backup_path"], managed)
-            available_tools.remove(tool)
-    state["available_tools"] = available_tools
-    save_state(state)
-
-    console.print()
-    success_tools = [(t, s) for t, s in results if s]
-    if success_tools:
-        lines = []
-        for tool, _ in success_tools:
-            spec = TOOL_SPECS[tool]
-            lines.append(f"[green]✓[/green] [bold]{spec['display']}[/bold] — run with [cyan]coding-gateway --agent {tool}[/cyan]")
-        console.print(Panel("\n".join(lines), title="Ready", style="green", expand=False))
-
-
 def configure_workspace_command() -> int:
-    workspace = prompt_for_configuration()
+    workspace = _prompt_for_configuration()
     state = configure_shared_state(workspace)
     state = configure_all_tools(state)
 
-    mode = (
-        "Databricks AI Gateway V2"
-        if state.get("use_ai_gateway_v2")
-        else "Workspace serving endpoint"
-    )
     available_tools = state.get("available_tools") or []
     summary_lines = [
         f"[bold]Workspace:[/bold] [cyan]{state['workspace']}[/cyan]",
-        f"[bold]Mode:[/bold] [cyan]{mode}[/cyan]",
     ]
     for tool, spec in TOOL_SPECS.items():
         if tool in available_tools:
             summary_lines.append(f"[bold]{spec['display']}:[/bold] [green]configured[/green]")
         else:
             summary_lines.append(f"[bold]{spec['display']}:[/bold] [dim]not available[/dim]")
-    console.print(Panel("\n".join(summary_lines), title="Configuration Complete", style="green", expand=False))
+    console.print(
+        Panel(
+            "\n".join(summary_lines),
+            title="Configuration Complete",
+            style="green",
+            expand=False,
+        )
+    )
 
     if available_tools:
         validate_all_tools(state)
     return 0
 
 
-
-def build_mcp_http_entry(url: str, client_id: str, callback_port: int = 8080) -> dict:
-    return {
-        "type": "http",
-        "url": url,
-        "oauth": {
-            "clientId": client_id,
-            "callbackPort": callback_port,
-        },
-    }
-
-
-def add_claude_mcp_server(name: str, entry: dict, client_secret: str) -> None:
-    env = os.environ.copy()
-    env["MCP_CLIENT_SECRET"] = client_secret
-    try:
-        run(
-            ["claude", "mcp", "add-json", name, json.dumps(entry),
-             "--client-secret"],
-            env=env,
-            timeout=30,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Failed to add MCP server '{name}' via claude CLI.") from exc
-
-
-def configure_mcp_command() -> int:
-    state = load_state()
-    workspace = state.get("workspace")
-    if not workspace:
-        raise RuntimeError(
-            "Workspace is not configured. Run `coding-gateway configure` first."
-        )
-
-    if not shutil.which("claude"):
-        raise RuntimeError(
-            "`claude` CLI is not installed. Install it with: npm install -g @anthropic-ai/claude-code"
-        )
-
-    ensure_databricks_auth(workspace)
-
-    print_section("MCP Server Configuration")
-    print_note("Configure Claude Code to connect to Databricks MCP servers.")
-    print_note(f"Workspace: {workspace}")
-
-    print_heading("OAuth Credentials")
-    print_note("These will be used for all MCP servers added in this session.")
-    client_id = prompt_for_client_id()
-    client_secret = prompt_for_client_secret()
-
-    state["mcp_oauth"] = {"client_id": client_id, "client_secret": client_secret}
-    mcp_servers: list[dict] = list(state.get("mcp_servers") or [])
-
-    added: list[str] = []
-
-    print_section("Add MCP Server")
-    while True:
-        selection = prompt_for_choice(
-            "Select server type",
-            [
-                ("external", "External MCP server (e.g. confluence-mcp, jira-mcp)"),
-                ("uc-functions", "UC Functions (Unity Catalog AI functions)"),
-                ("genie", "Genie (AI/BI dashboard)"),
-                ("custom", "Custom MCP server URL"),
-                ("done", "Done — exit"),
-            ],
-        )
-
-        if selection == "done":
-            break
-
-        if selection == "external":
-            server_name = console.input(
-                f"  {label('MCP server name')} {muted('(e.g. confluence-mcp, jira-mcp)')} {muted('›')} "
-            ).strip()
-            if not server_name:
-                print_err("Server name cannot be empty.")
-                continue
-            url = f"{workspace}/api/2.0/mcp/external/{server_name}"
-            entry_name = server_name
-
-        elif selection == "uc-functions":
-            catalog = console.input(f"  {label('Catalog name')} {muted('›')} ").strip()
-            schema = console.input(f"  {label('Schema name')} {muted('›')} ").strip()
-            if not catalog or not schema:
-                print_err("Catalog and schema cannot be empty.")
-                continue
-            url = f"{workspace}/api/2.0/mcp/functions/{catalog}/{schema}"
-            entry_name = f"databricks-uc-{catalog}-{schema}"
-
-        elif selection == "genie":
-            space_id = console.input(f"  {label('Genie space ID')} {muted('›')} ").strip()
-            if not space_id:
-                print_err("Space ID cannot be empty.")
-                continue
-            url = f"{workspace}/api/2.0/mcp/genie/{space_id}"
-            entry_name = f"databricks-genie-{space_id}"
-
-        elif selection == "custom":
-            url = console.input(f"  {label('Full MCP server URL')} {muted('›')} ").strip()
-            if not url:
-                print_err("URL cannot be empty.")
-                continue
-            entry_name = console.input(f"  {label('Server name')} {muted('›')} ").strip()
-            if not entry_name:
-                print_err("Server name cannot be empty.")
-                continue
-
-        else:
-            continue
-
-        entry = build_mcp_http_entry(url, client_id)
-        add_claude_mcp_server(entry_name, entry, client_secret)
-        added.append(entry_name)
-        mcp_servers.append(
-            {
-                "name": entry_name,
-                "url": url,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            }
-        )
-        state["mcp_servers"] = mcp_servers
-        save_state(state)
-        print_success(f"Added {entry_name}")
-
-    if not added:
-        print_note("No MCP servers added.")
-        return 0
-
-    print_heading("MCP Configured")
-    for name in added:
-        console.print(f"  [bold green]●[/bold green] [cyan]{name}[/cyan]")
-    print_success("MCP servers registered via `claude mcp add-json`")
-    print_note("Run `claude mcp list` to see all configured servers.")
-    return 0
-
-
-def usage() -> int:
-    state = load_state()
-    workspace = state.get("workspace")
-    if not workspace:
-        raise RuntimeError("Workspace is not configured. Run `coding-gateway configure` first.")
-    if not bool(state.get("use_ai_gateway_v2")):
-        raise RuntimeError(
-            "Usage summary requires Databricks AI Gateway V2. "
-            f"Run `coding-gateway configure`, enable AI Gateway V2, then try again. Docs: {AI_GATEWAY_V2_DOCS_URL}"
-        )
-
-    ensure_databricks_auth(workspace)
-    with spinner("Retrieving Databricks access token..."):
-        token = get_databricks_token(workspace)
-
-    with spinner("Discovering SQL warehouse..."):
-        resolved_http_path = discover_sql_warehouse_http_path(workspace, token, quiet=False)
-
-    with spinner("Querying system.ai_gateway.usage..."):
-        columns, rows = run_usage_query(
-            workspace,
-            resolved_http_path,
-            token,
-            build_usage_report_query(),
-        )
-    records = parse_usage_rows(columns, rows)
-    requester_name = find_requester_name(workspace, resolved_http_path, token, records)
-
-    console.print(render_usage_summary(records, requester_name))
-
-    table_headers = ["Date", "Day", "Tokens", "Sessions", "Duration", "Models"]
-    table_widths = [8, 5, 10, 8, 8, 24]
-
-    for tool, spec in TOOL_SPECS.items():
-        print_heading(f"{spec['display']} · Last {USAGE_BREAKDOWN_DAYS} Days")
-        console.print(
-            render_box_table(
-                table_headers,
-                build_tool_breakdown_rows(records, tool),
-                max_widths=table_widths,
-            )
-        )
-    return 0
-
-
-def launch_tool(tool: str, tool_args: list[str]) -> None:
-    if tool == "gemini":
-        raise RuntimeError("Use launch_gemini_tool for Gemini.")
-    if tool == "opencode":
-        raise RuntimeError("Use launch_opencode_tool for OpenCode.")
-    binary = TOOL_SPECS[tool]["binary"]
-    os.execvp(binary, [binary, *tool_args])
-
-
-def launch_gemini_tool(state: dict, tool_args: list[str]) -> None:
-    token = refresh_gemini_token_once(state)
-    model = default_model_for_tool("gemini", state)
-    if not model:
-        raise RuntimeError("No Gemini model is configured.")
-    env = build_gemini_runtime_env(
-        state["workspace"],
-        bool(state.get("use_ai_gateway_v2")),
-        model,
-        token,
-    )
-
-    stop_event = threading.Event()
-    refresher = threading.Thread(
-        target=refresh_gemini_env_forever,
-        args=(state, stop_event),
-        daemon=True,
-    )
-    refresher.start()
-
-    proc = subprocess.Popen([TOOL_SPECS["gemini"]["binary"], *tool_args], env=env)
-    try:
-        returncode = proc.wait()
-    except KeyboardInterrupt:
-        proc.send_signal(signal.SIGINT)
-        returncode = proc.wait()
-    finally:
-        stop_event.set()
-        refresher.join(timeout=1)
-
-    raise SystemExit(returncode)
-
-
-def launch_opencode_tool(state: dict, tool_args: list[str]) -> None:
-    """Launch opencode with background token refresh (same pattern as Gemini)."""
-    refresh_opencode_token_once(state)
-
-    stop_event = threading.Event()
-    refresher = threading.Thread(
-        target=refresh_opencode_config_forever,
-        args=(state, stop_event),
-        daemon=True,
-    )
-    refresher.start()
-
-    proc = subprocess.Popen([TOOL_SPECS["opencode"]["binary"], *tool_args])
-    try:
-        returncode = proc.wait()
-    except KeyboardInterrupt:
-        proc.send_signal(signal.SIGINT)
-        returncode = proc.wait()
-    finally:
-        stop_event.set()
-        refresher.join(timeout=1)
-
-    raise SystemExit(returncode)
-
-
 def status() -> int:
     state = load_state()
     workspace = state.get("workspace")
-    use_ai_gateway_v2 = bool(state.get("use_ai_gateway_v2"))
     managed_configs = state.get("managed_configs") or {}
 
     console.print(heading("coding-gateway status"))
@@ -2038,12 +136,6 @@ def status() -> int:
 
     print_heading("Provider")
     print_kv("Workspace URL", workspace or "not configured")
-    print_kv(
-        "Mode",
-        "Databricks AI Gateway V2"
-        if use_ai_gateway_v2
-        else "Workspace serving endpoint",
-    )
 
     print_heading("Tools")
     for tool, spec in TOOL_SPECS.items():
@@ -2075,7 +167,9 @@ def revert() -> int:
     managed_configs = state.get("managed_configs") or {}
 
     results: dict[str, bool] = {
-        tool: restore_file(spec["config_path"], spec["backup_path"], bool(managed_configs.get(tool)))
+        tool: restore_file(
+            spec["config_path"], spec["backup_path"], bool(managed_configs.get(tool))
+        )
         for tool, spec in TOOL_SPECS.items()
     }
     clear_state()
@@ -2086,6 +180,11 @@ def revert() -> int:
         print_kv(f"{spec['display']} config", "restored" if results[tool] else "unchanged")
     print_success("coding-gateway state cleared")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# typer app
+# ---------------------------------------------------------------------------
 
 
 app = typer.Typer(
@@ -2100,49 +199,51 @@ app.add_typer(configure_app, name="configure", help="Configure workspace and too
 @app.callback(invoke_without_command=True)
 def launch(
     ctx: typer.Context,
-    agent: Annotated[str, typer.Option("--agent", help="Agent to launch: codex, claude, gemini, or opencode.")] = DEFAULT_TOOL,
+    agent: Annotated[
+        str,
+        typer.Option("--agent", help="Agent to launch: codex, claude, gemini, or opencode."),
+    ] = DEFAULT_TOOL,
 ) -> None:
     """Launch Codex, Claude Code, Gemini CLI, or OpenCode via Databricks."""
     if ctx.invoked_subcommand is not None:
         return
     try:
-        _tool = normalize_tool(agent)
-        ensure_bootstrap_dependencies(_tool)
-        state = ensure_provider_state(_tool)
-        state, resolved_model = resolve_launch_model(_tool, state, None)
-        state = configure_tool(_tool, state, resolved_model)
+        tool = normalize_tool(agent)
+        ensure_bootstrap_dependencies(tool)
+        state = ensure_provider_state(tool)
+        state, resolved_model = resolve_launch_model(tool, state, None)
+        state = configure_tool(tool, state, resolved_model)
         print_section("Launching")
-        print_kv("Tool", TOOL_SPECS[_tool]["display"])
+        print_kv("Tool", TOOL_SPECS[tool]["display"])
         if resolved_model:
             print_kv("Model", resolved_model)
-        print_kv("Base URL", state["base_urls"][_tool])
-        if _tool in ("gemini", "opencode"):
-            print_note(f"{TOOL_SPECS[_tool]['display']} token refresh is managed automatically every 30 minutes while the session is running.")
-        print_success(f"Starting {TOOL_SPECS[_tool]['display']}")
-        if _tool == "gemini":
-            launch_gemini_tool(state, ctx.args)
-        elif _tool == "opencode":
-            launch_opencode_tool(state, ctx.args)
-        else:
-            launch_tool(_tool, ctx.args)
+        print_kv("Base URL", str(state["base_urls"][tool]))
+        if tool in ("gemini", "opencode"):
+            print_note(
+                f"{TOOL_SPECS[tool]['display']} token refresh is managed automatically "
+                f"every 30 minutes while the session is running."
+            )
+        print_success(f"Starting {TOOL_SPECS[tool]['display']}")
+        launch_agent(tool, state, ctx.args)
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except KeyboardInterrupt:
         print_err("Interrupted.")
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
 
 
 @configure_app.callback(invoke_without_command=True)
 def configure(
     ctx: typer.Context,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print config files without writing them.")] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print config files without writing them.")
+    ] = False,
 ) -> None:
-    """Configure workspace URL and auto-detect AI Gateway."""
+    """Configure workspace URL and AI Gateway."""
     if ctx.invoked_subcommand is not None:
         return
-    global _dry_run
-    _dry_run = dry_run
+    set_dry_run(dry_run)
     try:
         install_databricks_cli()
         for t in TOOL_SPECS:
@@ -2150,10 +251,10 @@ def configure(
         configure_workspace_command()
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except KeyboardInterrupt:
         print_err("Interrupted.")
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
 
 
 @configure_app.command("mcp")
@@ -2163,10 +264,10 @@ def configure_mcp() -> None:
         configure_mcp_command()
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except KeyboardInterrupt:
         print_err("Interrupted.")
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
 
 
 @app.command("status")
@@ -2176,7 +277,7 @@ def status_cmd() -> None:
         status()
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command("revert")
@@ -2186,7 +287,7 @@ def revert_cmd() -> None:
         revert()
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command("usage")
@@ -2194,10 +295,10 @@ def usage_cmd() -> None:
     """Show Databricks AI Gateway usage summary (last 7 days)."""
     try:
         install_databricks_cli()
-        usage()
+        usage_report()
     except RuntimeError as exc:
         print_err(str(exc))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 def main() -> None:

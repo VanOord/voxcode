@@ -1,0 +1,193 @@
+"""Tests for agents/opencode.py."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import patch
+
+from coding_tool_gateway.agents import opencode
+
+WS = "https://example.databricks.com"
+
+
+def _base_urls() -> dict[str, str]:
+    return {
+        "anthropic": f"{WS}/ai-gateway/anthropic/v1",
+        "gemini": f"{WS}/ai-gateway/gemini/v1beta",
+    }
+
+
+class TestOpencodeSpec:
+    def test_binary(self):
+        assert opencode.SPEC["binary"] == "opencode"
+
+    def test_package(self):
+        assert opencode.SPEC["package"] == "opencode-ai"
+
+    def test_display(self):
+        assert opencode.SPEC["display"] == "OpenCode"
+
+
+class TestRenderOverlay:
+    def test_sets_model(self):
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), {})
+        assert overlay["model"] == "claude-sonnet"
+
+    def test_anthropic_provider_added_when_models_present(self):
+        models = {"anthropic": ["claude-sonnet"], "gemini": []}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        assert "databricks-anthropic" in overlay["provider"]
+
+    def test_gemini_provider_added_when_models_present(self):
+        models = {"anthropic": [], "gemini": ["gemini-2"]}
+        overlay, _ = opencode.render_overlay("gemini-2", "tok", _base_urls(), models)
+        assert "databricks-google" in overlay["provider"]
+
+    def test_both_providers_when_both_present(self):
+        models = {"anthropic": ["claude-sonnet"], "gemini": ["gemini-2"]}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        assert "databricks-anthropic" in overlay["provider"]
+        assert "databricks-google" in overlay["provider"]
+
+    def test_no_provider_key_when_no_models(self):
+        overlay, _ = opencode.render_overlay("model", "tok", _base_urls(), {})
+        assert "provider" not in overlay
+
+    def test_anthropic_base_url(self):
+        models = {"anthropic": ["claude-sonnet"]}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        options = overlay["provider"]["databricks-anthropic"]["options"]
+        assert options["baseURL"] == f"{WS}/ai-gateway/anthropic/v1"
+
+    def test_gemini_base_url(self):
+        models = {"gemini": ["gemini-2"]}
+        overlay, _ = opencode.render_overlay("gemini-2", "tok", _base_urls(), models)
+        options = overlay["provider"]["databricks-google"]["options"]
+        assert options["baseURL"] == f"{WS}/ai-gateway/gemini/v1beta"
+
+    def test_token_in_api_key(self):
+        models = {"anthropic": ["claude-sonnet"]}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "mytoken", _base_urls(), models)
+        assert overlay["provider"]["databricks-anthropic"]["options"]["apiKey"] == "mytoken"
+
+    def test_authorization_header(self):
+        models = {"anthropic": ["claude-sonnet"]}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        headers = overlay["provider"]["databricks-anthropic"]["options"]["headers"]
+        assert headers["Authorization"] == "Bearer tok"
+
+    def test_managed_keys_include_model(self):
+        _, keys = opencode.render_overlay("model", "tok", _base_urls(), {})
+        assert ["model"] in keys
+
+    def test_managed_keys_include_anthropic_provider(self):
+        models = {"anthropic": ["claude-sonnet"]}
+        _, keys = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        assert ["provider", "databricks-anthropic"] in keys
+
+    def test_managed_keys_include_gemini_provider(self):
+        models = {"gemini": ["gemini-2"]}
+        _, keys = opencode.render_overlay("gemini-2", "tok", _base_urls(), models)
+        assert ["provider", "databricks-google"] in keys
+
+    def test_anthropic_models_listed(self):
+        models = {"anthropic": ["claude-sonnet", "claude-haiku"]}
+        overlay, _ = opencode.render_overlay("claude-sonnet", "tok", _base_urls(), models)
+        provider_models = overlay["provider"]["databricks-anthropic"]["models"]
+        assert "claude-sonnet" in provider_models
+        assert "claude-haiku" in provider_models
+
+
+class TestOpencodeDefaultModel:
+    def test_prefers_anthropic(self):
+        state = {"opencode_models": {"anthropic": ["claude-sonnet"], "gemini": ["gemini-2"]}}
+        assert opencode.default_model(state) == "claude-sonnet"
+
+    def test_falls_back_to_gemini(self):
+        state = {"opencode_models": {"anthropic": [], "gemini": ["gemini-2"]}}
+        assert opencode.default_model(state) == "gemini-2"
+
+    def test_returns_none_when_empty(self):
+        assert opencode.default_model({}) is None
+        assert opencode.default_model({"opencode_models": {}}) is None
+
+
+class TestOpencodeValidateCmd:
+    def test_starts_with_binary(self):
+        cmd = opencode.validate_cmd("opencode")
+        assert cmd[0] == "opencode"
+
+    def test_uses_run_subcommand(self):
+        cmd = opencode.validate_cmd("opencode")
+        assert "run" in cmd
+
+    def test_has_prompt(self):
+        cmd = opencode.validate_cmd("opencode")
+        assert len(cmd) > 2
+
+
+class TestWriteToolConfigStaleProviderCleanup:
+    def test_stale_providers_removed_before_merge(self, tmp_path, monkeypatch):
+        import coding_tool_gateway.agents.opencode as oc_mod
+        import coding_tool_gateway.config_io as config_io_mod
+
+        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
+        config_file = tmp_path / "opencode.json"
+        backup_file = tmp_path / "opencode-backup.json"
+        monkeypatch.setattr(oc_mod, "OPENCODE_CONFIG_PATH", config_file)
+        monkeypatch.setattr(oc_mod, "OPENCODE_BACKUP_PATH", backup_file)
+
+        stale = {
+            "provider": {
+                "databricks-anthropic": {"old": True},
+                "databricks-google": {"old": True},
+                "other-provider": {"keep": True},
+            }
+        }
+        config_file.write_text(json.dumps(stale), encoding="utf-8")
+
+        state = {
+            "workspace": WS,
+            "base_urls": {"opencode": _base_urls()},
+            "opencode_models": {"anthropic": ["claude-sonnet"]},
+            "managed_configs": {},
+        }
+
+        with (
+            patch("coding_tool_gateway.agents.opencode.get_databricks_token", return_value="tok"),
+            patch("coding_tool_gateway.state.save_state"),
+        ):
+            oc_mod.write_tool_config(state, "claude-sonnet", token="tok")
+
+        written = json.loads(config_file.read_text())
+        providers = written.get("provider", {})
+        # stale entry is replaced with new data, not kept as-is
+        assert providers.get("databricks-anthropic") != {"old": True}
+        # unmanaged provider entry survives
+        assert providers.get("other-provider") == {"keep": True}
+
+    def test_config_written_with_correct_model(self, tmp_path, monkeypatch):
+        import coding_tool_gateway.agents.opencode as oc_mod
+        import coding_tool_gateway.config_io as config_io_mod
+
+        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
+        config_file = tmp_path / "opencode.json"
+        backup_file = tmp_path / "opencode-backup.json"
+        monkeypatch.setattr(oc_mod, "OPENCODE_CONFIG_PATH", config_file)
+        monkeypatch.setattr(oc_mod, "OPENCODE_BACKUP_PATH", backup_file)
+
+        state = {
+            "workspace": WS,
+            "base_urls": {"opencode": _base_urls()},
+            "opencode_models": {"anthropic": ["claude-sonnet"]},
+            "managed_configs": {},
+        }
+
+        with (
+            patch("coding_tool_gateway.agents.opencode.get_databricks_token", return_value="tok"),
+            patch("coding_tool_gateway.state.save_state"),
+        ):
+            oc_mod.write_tool_config(state, "claude-sonnet", token="tok")
+
+        written = json.loads(config_file.read_text())
+        assert written["model"] == "claude-sonnet"

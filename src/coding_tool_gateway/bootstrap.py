@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from coding_tool_gateway.cli import TOOL_SPECS, ensure_bootstrap_dependencies, print_err
+from coding_tool_gateway.agents import TOOL_SPECS, ensure_bootstrap_dependencies
+from coding_tool_gateway.ui import print_err
 
 
 def main() -> int:

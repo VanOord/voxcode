@@ -1,0 +1,194 @@
+"""Tests for state.py — load/save/hydrate/clear/mark_tool_managed."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import patch
+
+import pytest
+
+import coding_tool_gateway.state as state_mod
+from coding_tool_gateway.state import (
+    STATE_VERSION,
+    clear_state,
+    hydrate_state,
+    load_full_state,
+    load_state,
+    mark_tool_managed,
+    save_state,
+)
+
+FAKE_WS = "https://example.databricks.com"
+FAKE_URLS = {
+    "codex": f"{FAKE_WS}/ai-gateway/codex/v1",
+    "claude": f"{FAKE_WS}/ai-gateway/anthropic",
+    "gemini": f"{FAKE_WS}/ai-gateway/gemini",
+    "opencode": {
+        "anthropic": f"{FAKE_WS}/ai-gateway/anthropic/v1",
+        "gemini": f"{FAKE_WS}/ai-gateway/gemini/v1beta",
+    },
+}
+
+
+@pytest.fixture(autouse=True)
+def patch_state_path(tmp_path, monkeypatch):
+    """Redirect STATE_PATH and APP_DIR to a temp directory for every test."""
+    fake_state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_mod, "STATE_PATH", fake_state_path)
+
+    import coding_tool_gateway.config_io as config_io_mod
+
+    monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def patch_build_urls():
+    """Avoid real network calls from hydrate_state."""
+    with patch("coding_tool_gateway.state.build_shared_base_urls", return_value=FAKE_URLS):
+        yield
+
+
+# ---------------------------------------------------------------------------
+# load_full_state
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFullState:
+    def test_returns_empty_structure_when_missing(self):
+        result = load_full_state()
+        assert result["state_version"] == STATE_VERSION
+        assert result["current_workspace"] is None
+        assert result["workspaces"] == {}
+
+    def test_returns_empty_when_wrong_version(self, tmp_path):
+        state_mod.STATE_PATH.write_text(
+            json.dumps({"state_version": 0, "current_workspace": None, "workspaces": {}}),
+            encoding="utf-8",
+        )
+        result = load_full_state()
+        assert result["workspaces"] == {}
+
+    def test_returns_empty_on_corrupt_json(self, tmp_path):
+        state_mod.STATE_PATH.write_text("not json", encoding="utf-8")
+        result = load_full_state()
+        assert result["current_workspace"] is None
+
+    def test_loads_valid_state(self, tmp_path):
+        data = {
+            "state_version": STATE_VERSION,
+            "current_workspace": FAKE_WS,
+            "workspaces": {FAKE_WS: {"claude_models": {"sonnet": "s4"}}},
+        }
+        state_mod.STATE_PATH.write_text(json.dumps(data), encoding="utf-8")
+        result = load_full_state()
+        assert result["current_workspace"] == FAKE_WS
+
+
+# ---------------------------------------------------------------------------
+# save_state / load_state round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestSaveLoadRoundTrip:
+    def test_round_trip(self):
+        state = {
+            "workspace": FAKE_WS,
+            "claude_models": {"sonnet": "databricks-claude-sonnet-4"},
+        }
+        save_state(state)
+        loaded = load_state()
+        assert loaded["workspace"] == FAKE_WS
+        assert loaded["claude_models"]["sonnet"] == "databricks-claude-sonnet-4"
+
+    def test_save_respects_dry_run(self):
+        import coding_tool_gateway.config_io as config_io_mod
+
+        config_io_mod.set_dry_run(True)
+        try:
+            save_state({"workspace": FAKE_WS})
+            assert not state_mod.STATE_PATH.exists()
+        finally:
+            config_io_mod.set_dry_run(False)
+
+    def test_load_state_returns_empty_when_no_workspace(self):
+        result = load_state()
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# clear_state
+# ---------------------------------------------------------------------------
+
+
+class TestClearState:
+    def test_clears_current_workspace(self):
+        save_state({"workspace": FAKE_WS, "claude_models": {}})
+        clear_state()
+        full = load_full_state()
+        assert full["current_workspace"] is None
+        assert FAKE_WS not in full.get("workspaces", {})
+
+    def test_clear_when_no_state_is_noop(self):
+        clear_state()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# hydrate_state
+# ---------------------------------------------------------------------------
+
+
+class TestHydrateState:
+    def test_empty_input_returns_empty(self):
+        result = hydrate_state({})
+        assert result == {"managed_configs": {}, "base_urls": {}}
+
+    def test_non_dict_returns_empty(self):
+        assert hydrate_state(None) == {}  # type: ignore[arg-type]
+        assert hydrate_state("string") == {}  # type: ignore[arg-type]
+
+    def test_populates_base_urls_when_workspace_present(self):
+        result = hydrate_state({"workspace": FAKE_WS})
+        assert result["base_urls"] == FAKE_URLS
+
+    def test_no_base_urls_when_no_workspace(self):
+        result = hydrate_state({"claude_models": {}})
+        assert result["base_urls"] == {}
+
+    def test_normalizes_managed_configs_dict_entry(self):
+        state = {"managed_configs": {"claude": {"keys": [["env", "X"]]}}}
+        result = hydrate_state(state)
+        assert result["managed_configs"]["claude"] == {"keys": [["env", "X"]]}
+
+    def test_normalizes_managed_configs_truthy_entry(self):
+        state = {"managed_configs": {"codex": True}}
+        result = hydrate_state(state)
+        assert result["managed_configs"]["codex"] == {"keys": []}
+
+    def test_drops_falsy_managed_configs(self):
+        state = {"managed_configs": {"codex": False, "claude": None}}
+        result = hydrate_state(state)
+        assert "codex" not in result["managed_configs"]
+        assert "claude" not in result["managed_configs"]
+
+
+# ---------------------------------------------------------------------------
+# mark_tool_managed
+# ---------------------------------------------------------------------------
+
+
+class TestMarkToolManaged:
+    def test_sets_managed_keys(self):
+        state: dict = {}
+        result = mark_tool_managed(state, "claude", [["env", "X"], ["apiKeyHelper"]])
+        assert result["managed_configs"]["claude"] == {"keys": [["env", "X"], ["apiKeyHelper"]]}
+
+    def test_sets_last_tool(self):
+        state: dict = {}
+        result = mark_tool_managed(state, "codex", [])
+        assert result["last_tool"] == "codex"
+
+    def test_preserves_existing_managed_configs(self):
+        state = {"managed_configs": {"gemini": {"keys": [["GEMINI_MODEL"]]}}}
+        result = mark_tool_managed(state, "codex", [["profile"]])
+        assert "gemini" in result["managed_configs"]
+        assert "codex" in result["managed_configs"]
