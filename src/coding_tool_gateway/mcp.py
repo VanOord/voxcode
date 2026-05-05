@@ -6,7 +6,7 @@ import json
 import shutil
 import subprocess
 
-from coding_tool_gateway.agents import opencode
+from coding_tool_gateway.agents import copilot, opencode
 from coding_tool_gateway.databricks import ensure_databricks_auth, list_databricks_connections
 from coding_tool_gateway.state import load_state, save_state
 from coding_tool_gateway.ui import (
@@ -29,6 +29,7 @@ MCP_CLIENTS = {
     "codex": {"binary": "codex", "display": "Codex"},
     "gemini": {"binary": "gemini", "display": "Gemini CLI"},
     "opencode": {"binary": "opencode", "display": "OpenCode"},
+    "copilot": {"binary": "copilot", "display": "GitHub Copilot CLI"},
 }
 MANUAL_EXTERNAL_MCP_VALUE = "external:manual"
 EXTERNAL_MCP_SELECTION_PREFIX = "external:"
@@ -37,6 +38,7 @@ VECTOR_SEARCH_VALUE = "vector-search"
 GENIE_VALUE = "genie"
 UC_FUNCTIONS_VALUE = "uc-functions"
 CUSTOM_MCP_VALUE = "custom"
+MCP_SETUP_BACK_VALUE = "back"
 MCP_CONNECTION_MARKERS = (
     "is_mcp",
     "is_mcp_connection",
@@ -205,6 +207,9 @@ def configure_client_mcp_server(client: str, name: str, url: str, entry: dict) -
     if client == "opencode":
         removed = opencode.write_mcp_server_config(name, url)
         return [MCP_USER_SCOPE] if removed else []
+    if client == "copilot":
+        removed = copilot.write_mcp_server_config(name, url)
+        return [MCP_USER_SCOPE] if removed else []
     raise RuntimeError(f"Unsupported MCP client '{client}'.")
 
 
@@ -280,13 +285,31 @@ def build_mcp_server_options(available_external_names: list[str]) -> list[tuple[
 
 
 def prompt_for_manual_external_mcp_connection() -> str | None:
-    server_name = console.input(
-        f"  {label('MCP server name')} {muted('(e.g. confluence-mcp, jira-mcp)')} {muted('›')} "
-    ).strip()
+    values = prompt_for_mcp_setup_fields(
+        [("MCP server name", "(e.g. confluence-mcp, jira-mcp)")]
+    )
+    if values is None:
+        return None
+    server_name = values[0]
     if not server_name:
         print_err("Server name cannot be empty.")
         return None
     return server_name
+
+
+def prompt_for_mcp_setup_fields(fields: list[tuple[str, str | None]]) -> list[str] | None:
+    print_note(f"Type `{MCP_SETUP_BACK_VALUE}` to return to MCP server selection.")
+    values: list[str] = []
+    for field_name, hint in fields:
+        prompt = f"  {label(field_name)}"
+        if hint:
+            prompt += f" {muted(hint)}"
+        prompt += f" {muted('›')} "
+        raw_value = console.input(prompt).strip()
+        if raw_value.lower() == MCP_SETUP_BACK_VALUE:
+            return None
+        values.append(raw_value)
+    return values
 
 
 def prompt_for_mcp_server_selection(available_external_names: list[str]) -> str:
@@ -338,7 +361,8 @@ def configure_mcp_command() -> int:
     clients = available_mcp_clients()
     if not clients:
         raise RuntimeError(
-            "No supported MCP clients are installed. Install Claude, Codex, Gemini, or OpenCode."
+            "No supported MCP clients are installed. Install Claude, Codex, Gemini, OpenCode, "
+            "or GitHub Copilot CLI."
         )
     missing_clients = [client for client in MCP_CLIENTS if client not in clients]
 
@@ -396,8 +420,12 @@ def configure_mcp_command() -> int:
             entry_name = "databricks-sql"
 
         elif selection == UC_FUNCTIONS_VALUE:
-            catalog = console.input(f"  {label('Catalog name')} {muted('›')} ").strip()
-            schema = console.input(f"  {label('Schema name')} {muted('›')} ").strip()
+            values = prompt_for_mcp_setup_fields(
+                [("Catalog name", None), ("Schema name", None)]
+            )
+            if values is None:
+                continue
+            catalog, schema = values
             if not catalog or not schema:
                 print_err("Catalog and schema cannot be empty.")
                 continue
@@ -405,9 +433,12 @@ def configure_mcp_command() -> int:
             entry_name = f"databricks-uc-{catalog}-{schema}"
 
         elif selection == VECTOR_SEARCH_VALUE:
-            catalog = console.input(f"  {label('Catalog name')} {muted('›')} ").strip()
-            schema = console.input(f"  {label('Schema name')} {muted('›')} ").strip()
-            index_name = console.input(f"  {label('Index name')} {muted('›')} ").strip()
+            values = prompt_for_mcp_setup_fields(
+                [("Catalog name", None), ("Schema name", None), ("Index name", None)]
+            )
+            if values is None:
+                continue
+            catalog, schema, index_name = values
             if not catalog or not schema or not index_name:
                 print_err("Catalog, schema, and index name cannot be empty.")
                 continue
@@ -415,7 +446,10 @@ def configure_mcp_command() -> int:
             entry_name = f"databricks-vector-search-{catalog}-{schema}-{index_name}"
 
         elif selection == GENIE_VALUE:
-            space_id = console.input(f"  {label('Genie space ID')} {muted('›')} ").strip()
+            values = prompt_for_mcp_setup_fields([("Genie space ID", None)])
+            if values is None:
+                continue
+            space_id = values[0]
             if not space_id:
                 print_err("Space ID cannot be empty.")
                 continue
@@ -423,11 +457,15 @@ def configure_mcp_command() -> int:
             entry_name = f"databricks-genie-{space_id}"
 
         elif selection == CUSTOM_MCP_VALUE:
-            url = console.input(f"  {label('Full MCP server URL')} {muted('›')} ").strip()
+            values = prompt_for_mcp_setup_fields(
+                [("Full MCP server URL", None), ("Server name", None)]
+            )
+            if values is None:
+                continue
+            url, entry_name = values
             if not url:
                 print_err("URL cannot be empty.")
                 continue
-            entry_name = console.input(f"  {label('Server name')} {muted('›')} ").strip()
             if not entry_name:
                 print_err("Server name cannot be empty.")
                 continue

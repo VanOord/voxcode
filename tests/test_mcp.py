@@ -6,6 +6,8 @@ import json
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
+
 from coding_tool_gateway import mcp
 
 WS = "https://example.databricks.com"
@@ -200,6 +202,27 @@ class TestExternalMcpConnectionNames:
         ) == ["github-mcp"]
 
 
+class TestConfigureClientMcpServer:
+    def test_configures_copilot_mcp_server(self, monkeypatch):
+        calls: list[tuple[str, str]] = []
+
+        monkeypatch.setattr(
+            mcp.copilot,
+            "write_mcp_server_config",
+            lambda name, url: calls.append((name, url)) or False,
+        )
+
+        removed_scopes = mcp.configure_client_mcp_server(
+            "copilot",
+            "github",
+            f"{WS}/api/2.0/mcp/external/github",
+            mcp.build_mcp_http_entry(f"{WS}/api/2.0/mcp/external/github"),
+        )
+
+        assert removed_scopes == []
+        assert calls == [("github", f"{WS}/api/2.0/mcp/external/github")]
+
+
 class TestBuildMcpServerOptions:
     def test_includes_discovered_mcps_in_initial_options(self):
         assert mcp.build_mcp_server_options(["confluence-mcp", "github-mcp"]) == [
@@ -230,6 +253,16 @@ class TestBuildMcpServerOptions:
         assert output.index("Genie Space") < output.index("Custom MCP URLs")
         assert output.index("Unity Catalog functions") < output.index("Custom MCP URLs")
         assert "Built-in AI tools" not in output
+
+
+class TestPromptForMcpSetupFields:
+    def test_returns_none_when_user_types_back(self, monkeypatch, capsys):
+        monkeypatch.setattr(mcp.console, "input", lambda *args, **kwargs: "back")
+
+        assert mcp.prompt_for_mcp_setup_fields([("Catalog name", None)]) is None
+
+        output = capsys.readouterr().out
+        assert "Type `back` to return to MCP server selection." in output
 
 
 class TestConfigureMcpCommand:
@@ -343,7 +376,7 @@ class TestConfigureMcpCommand:
         monkeypatch.setattr(
             mcp,
             "available_mcp_clients",
-            lambda: ["claude", "codex", "gemini", "opencode"],
+            lambda: ["claude", "codex", "gemini", "opencode", "copilot"],
         )
         monkeypatch.setattr(
             mcp,
@@ -389,13 +422,14 @@ class TestConfigureMcpCommand:
             ("codex", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
             ("gemini", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
             ("opencode", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
+            ("copilot", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
         ]
         assert saved_states[-1]["mcp_servers"] == [
             {
                 "name": "github-mcp",
                 "url": f"{WS}/api/2.0/mcp/external/github-mcp",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude", "codex", "gemini", "opencode"],
+                "clients": ["claude", "codex", "gemini", "opencode", "copilot"],
             }
         ]
 
@@ -478,6 +512,33 @@ class TestConfigureMcpCommand:
                 },
             )
         ]
+
+    @pytest.mark.parametrize("selection", ["vector-search", "genie", "uc-functions", "custom"])
+    def test_returns_to_selection_when_backing_out_of_setup(self, monkeypatch, selection):
+        configured: list[tuple[str, str, str, dict]] = []
+        saved_states: list[dict] = []
+        selections = iter([selection, "done"])
+
+        monkeypatch.setattr(mcp, "load_state", lambda: {"workspace": WS})
+        monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
+        monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace: None)
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "discover_external_mcp_connection_names", lambda workspace: [])
+        monkeypatch.setattr(
+            mcp, "prompt_for_mcp_server_selection", lambda *args, **kwargs: next(selections)
+        )
+        monkeypatch.setattr(mcp.console, "input", lambda *args, **kwargs: "back")
+        monkeypatch.setattr(
+            mcp,
+            "configure_client_mcp_server",
+            lambda client, name, url, entry: configured.append((client, name, url, entry)) or [],
+        )
+        monkeypatch.setattr(mcp, "save_state", lambda state: saved_states.append(state.copy()))
+
+        assert mcp.configure_mcp_command() == 0
+
+        assert configured == []
+        assert saved_states == []
 
     def test_registers_genie_space_server(self, monkeypatch):
         saved_states: list[dict] = []
