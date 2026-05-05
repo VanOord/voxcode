@@ -7,8 +7,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: linux-ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v5.4.1
       - run: uv run pytest

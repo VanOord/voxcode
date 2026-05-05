@@ -103,7 +103,7 @@ def write_tool_config(
     existing = read_json_safe(OPENCODE_CONFIG_PATH)
     providers = existing.get("provider")
     if isinstance(providers, dict):
-        for stale in ("databricks-anthropic", "databricks-google"):
+        for stale in ("databricks-anthropic", "databricks-google", "databricks-openai"):
             providers.pop(stale, None)
     merged = deep_merge_dict(existing, overlay)
     write_json_file(OPENCODE_CONFIG_PATH, merged)
