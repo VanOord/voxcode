@@ -50,13 +50,12 @@ coding-gateway configure
 coding-gateway configure mcp
 ```
 
-Add Databricks MCP servers to installed MCP-capable tools: Codex, Claude Code, Gemini CLI, and OpenCode.
+Add Databricks MCP servers to installed MCP-capable tools: Codex, Claude Code, Gemini CLI, OpenCode, and GitHub Copilot CLI.
 Options are shown in this order:
 
 - Discovered external MCP connections
 - Databricks SQL
-- Built-in AI tools
-- Other Databricks MCP products
+- Managed Databricks MCPs (Vector Search, UC Functions, etc.)
 - Custom MCP server URL
 
 Discovered external MCP connections are listed directly. MCP auth uses a Databricks token that
