@@ -56,6 +56,15 @@ LEGACY_MANAGED_KEYS: list[list[str]] = [
     ["model_providers", CODEX_MODEL_PROVIDER_NAME, "http_headers"],
 ]
 
+_GPT_RE = re.compile(r"(?:databricks-)?gpt-(\d+)(?:[.-](\d+))?(?:[.-](\d+))?(-.+|[a-z].*)?")
+
+# These models should use the Databricks ID, not the OpenAI ID, as the OpenAI
+# ID is incompatible with Codex.
+CODEX_OPENAI_ID_INCOMPATIBLE_MODELS = {
+    "databricks-gpt-5-2-codex",
+    "databricks-gpt-5-4-nano",
+}
+
 
 def is_update_available() -> tuple[str, str] | None:
     return available_npm_package_update(SPEC["package"])
@@ -177,9 +186,44 @@ def _remove_legacy_ucode_profile() -> None:
         write_toml_file(path, doc)
 
 
+def _openai_model_id(model: str | None) -> str | None:
+    """Map Databricks GPT endpoint ids to OpenAI model ids for Codex metadata."""
+    parsed = _parse_gpt(model)
+    if parsed is None:
+        return model
+    major, minor, patch, suffix = parsed
+    version = str(major)
+    if minor is not None:
+        version += f".{minor}"
+    if patch is not None:
+        version += f".{patch}"
+    return f"gpt-{version}{suffix}"
+
+
+def _codex_model_id(model: str | None) -> str | None:
+    if model in CODEX_OPENAI_ID_INCOMPATIBLE_MODELS:
+        return model
+    return _openai_model_id(model)
+
+
+def _parse_gpt(model: str | None) -> tuple[int, int | None, int | None, str] | None:
+    if not model:
+        return None
+    match = _GPT_RE.fullmatch(model.split("/")[-1])
+    if not match:
+        return None
+    major, minor, patch, suffix = match.groups()
+    return (
+        int(major),
+        int(minor) if minor is not None else None,
+        int(patch) if patch is not None else None,
+        suffix or "",
+    )
+
+
 def write_tool_config(state: dict, model: str | None = None) -> dict:
     workspace = state["workspace"]
-    chosen_model = model or default_model(state)
+    chosen_model = _codex_model_id(model or default_model(state))
     databricks_profile = state.get("profile")
 
     if _use_legacy_layout():
@@ -208,8 +252,26 @@ def write_tool_config(state: dict, model: str | None = None) -> dict:
 
 
 def default_model(state: dict) -> str | None:
+    """Pick the newest GPT model when multiple are available.
+
+    The discovery list is alphabetically sorted, which can put
+    "databricks-gpt-5" ahead of "databricks-gpt-5-5". Prefer the
+    highest semantic version instead. Falls back to the first
+    discovered entry when parsing fails.
+    """
     codex_models = state.get("codex_models") or []
-    return codex_models[0] if codex_models else None
+    if not codex_models:
+        return None
+
+    def _gpt_version_key(mid: str) -> tuple[int, int, int, int]:
+        parsed = _parse_gpt(mid)
+        if parsed is None:
+            return (0, 0, 0, 0)
+        major, minor, patch, suffix = parsed
+        base_bonus = 1 if not suffix else 0
+        return (major, minor or 0, patch or 0, base_bonus)
+
+    return max(codex_models, key=_gpt_version_key)
 
 
 def launch(state: dict, tool_args: list[str]) -> None:
