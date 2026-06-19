@@ -12,16 +12,20 @@ from __future__ import annotations
 
 # ─── Anthropic models (served via AI Gateway anthropic-compatible endpoint) ───
 # These appear in OpenCode as the "databricks-anthropic" provider.
+# IDs must match what `GET /ai-gateway/anthropic/v1/models` returns.
 ALLOWED_ANTHROPIC_MODELS: list[str] = [
-    "claude-sonnet-4-20250514",
-    "claude-haiku-4-20250514",
+    "databricks-claude-sonnet-4-6",
+    "databricks-claude-sonnet-4-5",
+    "databricks-claude-sonnet-4",
+    "databricks-claude-haiku-4-5",
 ]
 
 # ─── Google models (served via AI Gateway gemini-compatible endpoint) ─────────
 # These appear in OpenCode as the "databricks-google" provider.
+# IDs must match what `GET /api/2.0/serving-endpoints:foundation-models` returns
+# for endpoints exposing api_type `gemini/v1/generateContent`.
 ALLOWED_GEMINI_MODELS: list[str] = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
+    # No gemini endpoints currently available on this workspace.
 ]
 
 
