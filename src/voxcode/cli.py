@@ -271,7 +271,7 @@ def configure_shared_state(
     if fetch_all or "opencode" in tools:
         state["opencode_models"] = opencode_models
     save_state(state)
-    # Scrub MCP entries that ucode wrote for the previous workspace so the new
+    # Scrub MCP entries that voxcode wrote for the previous workspace so the new
     # workspace's agent configs aren't stale.
     if previous_workspace and previous_workspace != workspace:
         purge_cross_workspace_mcp_residue(state, workspace)
@@ -830,7 +830,7 @@ def upgrade_cmd() -> None:
     """Upgrade voxcode to the latest version from GitHub."""
     import subprocess
 
-    git_url = "git+https://github.com/faustvo/ucode-vo"
+    git_url = "git+https://github.com/faustvo/voxcode"
     print_section("Upgrade")
     print_kv("Source", git_url)
     try:
@@ -839,7 +839,7 @@ def upgrade_cmd() -> None:
             check=True,
         )
     except FileNotFoundError:
-        print_err("`uv` was not found on PATH. Install uv to upgrade ucode.")
+        print_err("`uv` was not found on PATH. Install uv to upgrade voxcode.")
         raise typer.Exit(1) from None
     except subprocess.CalledProcessError as exc:
         print_err(f"Upgrade failed (exit code {exc.returncode}).")
