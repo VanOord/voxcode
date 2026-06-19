@@ -12,7 +12,7 @@
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/vanoord/voxcode
+uv tool install git+https://github.com/faustvo/voxcode
 ```
 
 ---
