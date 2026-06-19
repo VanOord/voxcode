@@ -22,8 +22,8 @@ from urllib.parse import urlencode, urlparse
 
 from databricks.sql.exc import ServerOperationError
 
-from ucode.config_io import APP_DIR
-from ucode.ui import (
+from voxcode.config_io import APP_DIR
+from voxcode.ui import (
     err_console,
     normalize_workspace_url,
     print_kv,
