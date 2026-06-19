@@ -262,14 +262,9 @@ def configure_shared_state(
     else:
         state.pop("use_pat", None)
     state["base_urls"] = build_shared_base_urls(workspace)
-    if want_claude:
-        state["claude_models"] = claude_models
-    if want_gemini:
-        state["gemini_models"] = gemini_models
-    if want_codex:
-        state["codex_models"] = codex_models
-    if fetch_all or "opencode" in tools:
-        state["opencode_models"] = opencode_models
+    state["claude_models"] = claude_models
+    state["gemini_models"] = gemini_models
+    state["opencode_models"] = opencode_models
     save_state(state)
     # Scrub MCP entries that voxcode wrote for the previous workspace so the new
     # workspace's agent configs aren't stale.
