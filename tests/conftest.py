@@ -6,14 +6,14 @@ import os
 
 import pytest
 
-from ucode.databricks import (
+from voxcode.databricks import (
     build_shared_base_urls,
     fetch_ai_gateway_claude_models,
     fetch_codex_models,
     fetch_gemini_models,
     get_databricks_token,
 )
-from ucode.ui import normalize_workspace_url
+from voxcode.ui import normalize_workspace_url
 
 
 @pytest.fixture(autouse=True)
@@ -23,8 +23,8 @@ def _isolate_ucode_state(tmp_path, monkeypatch):
     Defense in depth: even if an individual test forgets to patch save_state,
     it can never touch the developer's real ~/.ucode/state.json.
     """
-    import ucode.config_io as config_io_mod
-    import ucode.state as state_mod
+    import voxcode.config_io as config_io_mod
+    import voxcode.state as state_mod
 
     state_dir = tmp_path / ".ucode"
     state_dir.mkdir()

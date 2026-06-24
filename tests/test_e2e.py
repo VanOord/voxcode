@@ -19,7 +19,7 @@ from urllib import request as urllib_request
 
 import pytest
 
-from ucode.databricks import (
+from voxcode.databricks import (
     build_shared_base_urls,
     build_tool_base_url,
     discover_sql_warehouse_http_path,
@@ -30,7 +30,7 @@ from ucode.databricks import (
     has_valid_databricks_auth,
     workspace_hostname,
 )
-from ucode.ui import normalize_workspace_url
+from voxcode.ui import normalize_workspace_url
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -173,9 +173,9 @@ class TestStateRoundTrip:
     def test_configure_shared_state_and_reload(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace
     ):
-        import ucode.config_io as config_io_mod
-        import ucode.state as state_mod
-        from ucode.state import load_state, save_state
+        import voxcode.config_io as config_io_mod
+        import voxcode.state as state_mod
+        from voxcode.state import load_state, save_state
 
         monkeypatch.setattr(state_mod, "STATE_PATH", tmp_path / "state.json")
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
@@ -215,14 +215,14 @@ class TestConfigureSubset:
     def _redirect_config_paths(self, monkeypatch, tmp_path):
         """Redirect every agent's config path into tmp_path so the test
         doesn't touch the developer's real ~/.codex, ~/.claude, etc."""
-        import ucode.config_io as config_io_mod
-        from ucode.agents import claude, codex, copilot, gemini, opencode, pi
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import claude, codex, copilot, gemini, opencode, pi
 
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
 
         codex_dir = tmp_path / "codex_home" / ".codex"
         codex_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(codex, "CODEX_CONFIG_PATH", codex_dir / "ucode.config.toml")
+        monkeypatch.setattr(codex, "CODEX_CONFIG_PATH", codex_dir / "voxcode.config.toml")
         monkeypatch.setattr(codex, "CODEX_BACKUP_PATH", tmp_path / "codex.backup.toml")
 
         monkeypatch.setattr(claude, "CLAUDE_SETTINGS_PATH", tmp_path / "claude-settings.json")
@@ -240,20 +240,20 @@ class TestConfigureSubset:
         monkeypatch.setattr(pi, "PI_CONFIG_PATH", tmp_path / "pi-models.json")
         monkeypatch.setattr(pi, "PI_BACKUP_PATH", tmp_path / "pi-models.backup.json")
 
-        return codex_dir / "ucode.config.toml"
+        return codex_dir / "voxcode.config.toml"
 
     def test_only_picks_codex_writes_only_codex_config(self, tmp_path, monkeypatch, e2e_workspace):
         """User selects only codex → only codex's config file is written and
         state['available_tools'] contains exactly ['codex']."""
-        import ucode.cli as cli_mod
-        import ucode.state as state_mod
-        from ucode.state import load_state
+        import voxcode.cli as cli_mod
+        import voxcode.state as state_mod
+        from voxcode.state import load_state
 
         codex_path = self._redirect_config_paths(monkeypatch, tmp_path)
         monkeypatch.setattr(state_mod, "STATE_PATH", tmp_path / "state.json")
         # Don't actually run `databricks auth login`; the developer running
         # this suite is already authenticated.
-        monkeypatch.setattr("ucode.cli.run_databricks_login", lambda ws, profile=None: None)
+        monkeypatch.setattr("voxcode.cli.run_databricks_login", lambda ws, profile=None: None)
         # Skip the workspace prompt and the multi-select picker.
         monkeypatch.setattr(
             cli_mod, "_prompt_for_configuration", lambda tool=None: (e2e_workspace, None)
@@ -282,13 +282,13 @@ class TestConfigureSubset:
         """First run picks codex; second run picks claude. State should end
         up with both tools in available_tools (the un-picked codex is not
         dropped on the second run)."""
-        import ucode.cli as cli_mod
-        import ucode.state as state_mod
-        from ucode.state import load_state
+        import voxcode.cli as cli_mod
+        import voxcode.state as state_mod
+        from voxcode.state import load_state
 
         self._redirect_config_paths(monkeypatch, tmp_path)
         monkeypatch.setattr(state_mod, "STATE_PATH", tmp_path / "state.json")
-        monkeypatch.setattr("ucode.cli.run_databricks_login", lambda ws, profile=None: None)
+        monkeypatch.setattr("voxcode.cli.run_databricks_login", lambda ws, profile=None: None)
         monkeypatch.setattr(
             cli_mod, "_prompt_for_configuration", lambda tool=None: (e2e_workspace, None)
         )
@@ -302,7 +302,7 @@ class TestConfigureSubset:
 
         # Claude needs to be available on this workspace for the second run
         # to be a meaningful test.
-        from ucode.databricks import fetch_ai_gateway_claude_models, get_databricks_token
+        from voxcode.databricks import fetch_ai_gateway_claude_models, get_databricks_token
 
         token = get_databricks_token(e2e_workspace)
         if not fetch_ai_gateway_claude_models(e2e_workspace, token):
@@ -316,12 +316,12 @@ class TestConfigureSubset:
     def test_empty_pick_returns_zero_and_writes_nothing(self, tmp_path, monkeypatch, e2e_workspace):
         """User unchecks everything in the picker → no config files are
         written and the command exits 0."""
-        import ucode.cli as cli_mod
-        import ucode.state as state_mod
+        import voxcode.cli as cli_mod
+        import voxcode.state as state_mod
 
         codex_path = self._redirect_config_paths(monkeypatch, tmp_path)
         monkeypatch.setattr(state_mod, "STATE_PATH", tmp_path / "state.json")
-        monkeypatch.setattr("ucode.cli.run_databricks_login", lambda ws, profile=None: None)
+        monkeypatch.setattr("voxcode.cli.run_databricks_login", lambda ws, profile=None: None)
         monkeypatch.setattr(
             cli_mod, "_prompt_for_configuration", lambda tool=None: (e2e_workspace, None)
         )
@@ -380,8 +380,8 @@ class TestCodexLaunch:
 
     def test_launch_codex_per_model(self, tmp_path, monkeypatch, e2e_state, e2e_workspace):
         """Parametrized inline — iterates over all codex models and asserts each works."""
-        import ucode.config_io as config_io_mod
-        from ucode.agents import codex
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import codex
 
         _require_binary("codex")
         models = self._codex_models(e2e_state)
@@ -389,7 +389,7 @@ class TestCodexLaunch:
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
         config_dir = tmp_path / "codex_home" / ".codex"
         config_dir.mkdir(parents=True)
-        config_path = config_dir / "ucode.config.toml"
+        config_path = config_dir / "voxcode.config.toml"
         backup_path = tmp_path / "codex-config.backup.toml"
         monkeypatch.setattr(codex, "CODEX_CONFIG_PATH", config_path)
         monkeypatch.setattr(codex, "CODEX_BACKUP_PATH", backup_path)
@@ -399,7 +399,7 @@ class TestCodexLaunch:
         for model in models:
             state = {**e2e_state, "workspace": e2e_workspace}
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 codex.write_tool_config(state, model)
 
             cmd = codex.validate_cmd("codex")
@@ -428,8 +428,8 @@ class TestClaudeLaunch:
     def test_launch_claude_per_model(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import claude
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import claude
 
         _require_binary("claude")
         claude_models: dict = e2e_state.get("claude_models") or {}
@@ -452,7 +452,7 @@ class TestClaudeLaunch:
         failures = []
         for family, model_id in launchable_models:
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 claude.write_tool_config({**e2e_state, "workspace": e2e_workspace}, model_id)
 
             env = {
@@ -481,8 +481,8 @@ class TestGeminiLaunch:
     def test_launch_gemini_per_model(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import gemini, validate_tool
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import gemini, validate_tool
 
         _require_binary("gemini")
         # Gemini CLI >= 0.45 rewrites forced flash model ids (e.g.
@@ -501,7 +501,7 @@ class TestGeminiLaunch:
             pytest.skip("No Gemini models available on this workspace")
 
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "ucode.env")
+        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "voxcode.env")
         monkeypatch.setattr(gemini, "GEMINI_BACKUP_PATH", tmp_path / "gemini-ucode-env.backup")
         monkeypatch.setattr(gemini, "GEMINI_HOME_DIR", tmp_path / ".gemini-home")
         monkeypatch.setattr(
@@ -515,9 +515,9 @@ class TestGeminiLaunch:
         failures = []
         for model in gemini_models:
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 mp.setattr(
-                    "ucode.agents.gemini.get_databricks_token",
+                    "voxcode.agents.gemini.get_databricks_token",
                     lambda ws, profile=None, **kwargs: e2e_token,
                 )
                 state = {**e2e_state, "workspace": e2e_workspace}
@@ -525,7 +525,7 @@ class TestGeminiLaunch:
                 # Exercise the real production validate flow — same code path
                 # that `ucode configure` invokes after writing the config.
                 captured_state = state
-                mp.setattr("ucode.agents.load_state", lambda s=captured_state: s)
+                mp.setattr("voxcode.agents.load_state", lambda s=captured_state: s)
                 ok, err = validate_tool("gemini")
             if not ok:
                 failures.append(f"model={model} err={err}")
@@ -534,30 +534,30 @@ class TestGeminiLaunch:
 
 
 class TestGeminiFreshInstall:
-    """Verify Gemini works from ucode env without writing user settings.json."""
+    """Verify Gemini works from voxcode env without writing user settings.json."""
 
     def test_does_not_write_settings_json_for_auth(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import gemini
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import gemini
 
         settings_path = tmp_path / "settings.json"
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "ucode.env")
+        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "voxcode.env")
         monkeypatch.setattr(gemini, "GEMINI_BACKUP_PATH", tmp_path / "gemini-ucode-env.backup")
 
         gemini_models: list = e2e_state.get("gemini_models") or []
         model = gemini_models[0] if gemini_models else "some-model"
 
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
+            mp.setattr("voxcode.state.save_state", lambda s: None)
             gemini.write_tool_config(
                 {**e2e_state, "workspace": e2e_workspace}, model, token=e2e_token
             )
 
         assert not settings_path.exists(), "settings.json should not be created"
-        assert (tmp_path / "ucode.env").exists(), "ucode Gemini env file was not created"
+        assert (tmp_path / "voxcode.env").exists(), "ucode Gemini env file was not created"
 
 
 class TestOpencodeLaunch:
@@ -583,8 +583,8 @@ class TestOpencodeLaunch:
     def test_launch_opencode_per_model(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import opencode
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import opencode
 
         _require_binary("opencode")
         models = self._all_models(e2e_state)
@@ -610,9 +610,9 @@ class TestOpencodeLaunch:
                 config_path.unlink()
 
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 mp.setattr(
-                    "ucode.agents.opencode.get_databricks_token",
+                    "voxcode.agents.opencode.get_databricks_token",
                     lambda ws, profile=None, **kwargs: e2e_token,
                 )
                 opencode.write_tool_config(
@@ -690,8 +690,8 @@ class TestCopilotLaunch:
     def test_launch_copilot_per_model(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import copilot
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import copilot
 
         _require_binary("copilot")
         models = self._all_models(e2e_state)
@@ -707,9 +707,9 @@ class TestCopilotLaunch:
         failures = []
         for family, model in models:
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 mp.setattr(
-                    "ucode.agents.copilot.get_databricks_token",
+                    "voxcode.agents.copilot.get_databricks_token",
                     lambda ws, profile=None, **kwargs: e2e_token,
                 )
                 copilot.write_tool_config(
@@ -748,8 +748,8 @@ class TestPiLaunch:
         return out
 
     def test_launch_pi_per_model(self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import pi
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import pi
 
         _require_binary("pi")
         models = self._all_models(e2e_state)
@@ -773,9 +773,9 @@ class TestPiLaunch:
                 config_path.unlink()
 
             with pytest.MonkeyPatch().context() as mp:
-                mp.setattr("ucode.state.save_state", lambda s: None)
+                mp.setattr("voxcode.state.save_state", lambda s: None)
                 mp.setattr(
-                    "ucode.agents.pi.get_databricks_token",
+                    "voxcode.agents.pi.get_databricks_token",
                     lambda ws, profile=None, **kwargs: e2e_token,
                 )
                 pi.write_tool_config(
@@ -823,7 +823,7 @@ class TestWebSearchResponsesApi:
     web_search and assert the model returns non-empty text."""
 
     def test_call_responses_api_returns_text(self, monkeypatch, e2e_state, e2e_workspace):
-        from ucode import mcp_web_search
+        from voxcode import mcp_web_search
 
         model = _first_codex_model(e2e_state)
         monkeypatch.setenv("DATABRICKS_HOST", e2e_workspace)
@@ -940,8 +940,8 @@ class TestGeminiAuthRecovery:
     def test_recovers_when_initial_token_empty(
         self, tmp_path, monkeypatch, e2e_state, e2e_workspace, e2e_token
     ):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import gemini
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import gemini
 
         _require_binary("gemini")
         gemini_models: list = e2e_state.get("gemini_models") or []
@@ -949,7 +949,7 @@ class TestGeminiAuthRecovery:
             pytest.skip("No Gemini models available on this workspace")
 
         monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "ucode.env")
+        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "voxcode.env")
         monkeypatch.setattr(gemini, "GEMINI_BACKUP_PATH", tmp_path / "gemini-ucode-env.backup")
         monkeypatch.setattr(gemini, "GEMINI_HOME_DIR", tmp_path / ".gemini-home")
         monkeypatch.setattr(
@@ -960,7 +960,7 @@ class TestGeminiAuthRecovery:
         fake_db_dir = _make_reauth_fake_databricks(tmp_path / "fake_db", e2e_token)
 
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
+            mp.setattr("voxcode.state.save_state", lambda s: None)
             mp.setenv("PATH", f"{fake_db_dir}:{os.environ['PATH']}")
             # get_databricks_token will fail first, reauth, then return e2e_token
             _, recovered_token = gemini.write_tool_config(

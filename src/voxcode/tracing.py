@@ -1,33 +1,25 @@
-"""MLflow tracing: route Claude Code sessions to a Databricks experiment.
+"""MLflow tracing: route OpenCode sessions to a Databricks experiment.
 
-ucode points Claude Code's MLflow integration at a single, pre-provisioned
-experiment named ``ucode-traces`` whose traces are stored in a Unity Catalog
-table. ucode asserts the experiment exists and is UC-backed (it does not create
-it), resolves a SQL warehouse for UC writes, and persists the tracking URI,
-experiment id, and warehouse id. Auth reuses the workspace profile ucode
-already configures in ``~/.databrickscfg``.
-
-Scope: Claude Code only. Its `mlflow autolog claude` Stop hook writes traces to
-the UC table. Codex and OpenCode used the `@mlflow/codex`/`@mlflow/opencode` JS
-clients, which only reach the classic (non-UC) trace store, so their tracing was
-removed. Gemini's exporter is OTLP-only and was never wired here.
+voxcode points OpenCode's MLflow integration at a pre-provisioned
+experiment named ``voxcode-traces`` whose traces are stored in a Unity Catalog
+table.
 
 This module must not import ``mlflow`` (the heavy optional dependency) or
-``ucode.agents`` at import time: agents import the small helpers here, and the
+``voxcode.agents`` at import time: agents import the small helpers here, and the
 configure command imports agents lazily to avoid a cycle.
 """
 
 from __future__ import annotations
 
-from ucode.databricks import (
+from voxcode.databricks import (
     apply_pat_environment,
     ensure_databricks_auth,
     find_uc_backed_experiment,
     get_databricks_token,
     resolve_sql_warehouse_id,
 )
-from ucode.state import hydrate_state, load_full_state, save_state, set_current_workspace
-from ucode.ui import (
+from voxcode.state import hydrate_state, load_full_state, save_state, set_current_workspace
+from voxcode.ui import (
     print_kv,
     print_note,
     print_section,
@@ -77,7 +69,7 @@ def _missing_experiment_error(name: str, reason: str | None) -> str:
         f"  1. In the workspace, create an MLflow experiment named '{name}'.\n"
         "  2. Configure its trace storage to a Unity Catalog table "
         "(any catalog.schema.table you have access to).\n"
-        "  3. Re-run `ucode configure tracing`."
+        "  3. Re-run `voxcode configure tracing`."
     )
 
 
@@ -90,7 +82,7 @@ def _missing_warehouse_error(reason: str | None) -> str:
         f"No SQL warehouse is available to write traces to Unity Catalog{detail}.\n"
         "Writing traces to a UC-backed experiment requires a SQL warehouse:\n"
         "  1. Create a SQL warehouse in the workspace (SQL > SQL Warehouses).\n"
-        "  2. Re-run `ucode configure tracing`."
+        "  2. Re-run `voxcode configure tracing`."
     )
 
 
@@ -198,7 +190,7 @@ def _select_tracing_workspace(*, only_enabled: bool = False) -> dict:
         candidates = _tracing_capable_workspaces(full)
         if not candidates:
             raise RuntimeError(
-                "Claude Code is not configured. Run `ucode configure` for Claude Code first."
+                "Claude Code is not configured. Run `voxcode configure` for Claude Code first."
             )
 
     current = full.get("current_workspace")
@@ -224,7 +216,7 @@ def _select_tracing_workspace(*, only_enabled: bool = False) -> dict:
         if not (set(entry_check.get("available_tools") or []) & set(TRACING_AGENTS)):
             raise RuntimeError(
                 f"{workspace} has no tracing-capable agents configured. "
-                "Run `ucode configure` for it first."
+                "Run `voxcode configure` for it first."
             )
     return _hydrate_workspace_entry(full, workspace, profile or None)
 
@@ -233,7 +225,7 @@ def _rewrite_agent_configs(state: dict) -> dict:
     """Re-run each configured agent's config writer so it folds the current
     tracing state into its config files (adds keys when enabled, strips them
     when disabled)."""
-    from ucode.agents import configure_tool, default_model_for_tool
+    from voxcode.agents import configure_tool, default_model_for_tool
 
     for tool in _configured_tracing_agents(state):
         model = default_model_for_tool(tool, state)
@@ -245,7 +237,7 @@ def _install_agent_tracing_deps(state: dict) -> None:
     """Install the Claude tracing runtime (pinned mlflow CLI) when Claude is
     configured on this workspace and has tracing on. Claude is the only
     tracing-capable agent."""
-    from ucode.agents import claude
+    from voxcode.agents import claude
 
     configured = _configured_tracing_agents(state)
     if "claude" in configured and agent_tracing(state, "claude"):
@@ -308,7 +300,7 @@ def _enable_tracing_for_state(state: dict) -> dict:
     print_section("MLflow Tracing")
     print_kv("Workspace", workspace)
 
-    # Running `ucode configure tracing` is itself the opt-in, so there's no
+    # Running `voxcode configure tracing` is itself the opt-in, so there's no
     # confirmation prompt; `--disable` is the explicit way back off.
     token = get_databricks_token(workspace, profile)
 

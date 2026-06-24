@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-import ucode.databricks as databricks
-from ucode import tracing
-from ucode.agents import claude
+import voxcode.databricks as databricks
+from voxcode import tracing
+from voxcode.agents import claude
 
 WS = "https://example.databricks.com"
 
@@ -585,14 +585,14 @@ class TestInstallAgentTracingDeps:
 
     def test_installs_claude_runtime_when_configured(self):
         state = {**_enabled_state(), "available_tools": ["claude"]}
-        with patch("ucode.agents.claude.ensure_tracing_runtime") as claude_dep:
+        with patch("voxcode.agents.claude.ensure_tracing_runtime") as claude_dep:
             tracing._install_agent_tracing_deps(state)
         claude_dep.assert_called_once()
 
     def test_skips_when_claude_not_configured(self):
         # Claude isn't configured on this workspace, so its runtime is skipped.
         state = {**_enabled_state(), "available_tools": ["codex"]}
-        with patch("ucode.agents.claude.ensure_tracing_runtime") as claude_dep:
+        with patch("voxcode.agents.claude.ensure_tracing_runtime") as claude_dep:
             tracing._install_agent_tracing_deps(state)
         claude_dep.assert_not_called()
 

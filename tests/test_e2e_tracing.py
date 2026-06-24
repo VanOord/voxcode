@@ -26,8 +26,8 @@ import time
 
 import pytest
 
-from ucode import tracing
-from ucode.databricks import find_uc_backed_experiment, resolve_sql_warehouse_id
+from voxcode import tracing
+from voxcode.databricks import find_uc_backed_experiment, resolve_sql_warehouse_id
 
 # How long to wait for an emitted trace to show up in the experiment. Trace
 # ingestion is asynchronous, so we poll.
@@ -62,9 +62,9 @@ class TestClaudeTracingE2E:
         pytest.importorskip("mlflow", reason="mlflow not installed (pip install mlflow)")
         from mlflow import MlflowClient
 
-        import ucode.config_io as config_io_mod
-        from ucode.agents import claude
-        from ucode.databricks import get_databricks_token
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import claude
+        from voxcode.databricks import get_databricks_token
 
         _require_binary("claude")
 
@@ -126,7 +126,7 @@ class TestClaudeTracingE2E:
             pytest.skip("Could not set up the Claude MLflow tracing runtime in this environment")
 
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
+            mp.setattr("voxcode.state.save_state", lambda s: None)
             claude.write_tool_config(state, model)
 
         tracking_uri = state["tracing"]["tracking_uri"]

@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-import ucode.state as state_mod
-from ucode.state import (
+import voxcode.state as state_mod
+from voxcode.state import (
     STATE_VERSION,
     build_agent_state,
     clear_state,
@@ -43,7 +43,7 @@ def patch_state_path(tmp_path, monkeypatch):
     fake_state_path = tmp_path / "state.json"
     monkeypatch.setattr(state_mod, "STATE_PATH", fake_state_path)
 
-    import ucode.config_io as config_io_mod
+    import voxcode.config_io as config_io_mod
 
     monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
 
@@ -51,7 +51,7 @@ def patch_state_path(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def patch_build_urls():
     """Avoid real network calls from hydrate_state."""
-    with patch("ucode.state.build_shared_base_urls", return_value=FAKE_URLS):
+    with patch("voxcode.state.build_shared_base_urls", return_value=FAKE_URLS):
         yield
 
 
@@ -108,7 +108,7 @@ class TestSaveLoadRoundTrip:
         assert loaded["claude_models"]["sonnet"] == "databricks-claude-sonnet-4"
 
     def test_save_respects_dry_run(self):
-        import ucode.config_io as config_io_mod
+        import voxcode.config_io as config_io_mod
 
         config_io_mod.set_dry_run(True)
         try:

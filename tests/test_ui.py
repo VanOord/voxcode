@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ucode.ui import (
+from voxcode.ui import (
     format_duration,
     format_token_count,
     normalize_workspace_url,
@@ -156,7 +156,7 @@ class TestPromptForWorkspace:
     PROFILES = [("https://a.databricks.com", "prof-a"), ("https://b.databricks.com", "prof-b")]
 
     def test_returns_selected_profile_tuple(self):
-        with patch("ucode.ui.questionary.select") as mock_select:
+        with patch("voxcode.ui.questionary.select") as mock_select:
             mock_select.return_value.ask.return_value = (
                 "https://a.databricks.com",
                 "prof-a",
@@ -167,8 +167,8 @@ class TestPromptForWorkspace:
 
     def test_none_falls_through_to_manual_prompt(self):
         with (
-            patch("ucode.ui.questionary.select") as mock_select,
-            patch("ucode.ui.console.input", return_value="https://manual.databricks.com"),
+            patch("voxcode.ui.questionary.select") as mock_select,
+            patch("voxcode.ui.console.input", return_value="https://manual.databricks.com"),
         ):
             mock_select.return_value.ask.return_value = None
             url, profile = prompt_for_workspace("desc", profiles=self.PROFILES)
@@ -179,8 +179,8 @@ class TestPromptForWorkspace:
         # Regression: if questionary returns the choice title (e.g. "Enter a
         # different URL") instead of its value, we must not try to unpack it.
         with (
-            patch("ucode.ui.questionary.select") as mock_select,
-            patch("ucode.ui.console.input", return_value="https://manual.databricks.com"),
+            patch("voxcode.ui.questionary.select") as mock_select,
+            patch("voxcode.ui.console.input", return_value="https://manual.databricks.com"),
         ):
             mock_select.return_value.ask.return_value = "Enter a different URL"
             url, profile = prompt_for_workspace("desc", profiles=self.PROFILES)
@@ -188,7 +188,7 @@ class TestPromptForWorkspace:
         assert profile is None
 
     def test_no_profiles_goes_straight_to_manual_prompt(self):
-        with patch("ucode.ui.console.input", return_value="example.databricks.com"):
+        with patch("voxcode.ui.console.input", return_value="example.databricks.com"):
             url, profile = prompt_for_workspace("desc", profiles=None)
         assert url == "https://example.databricks.com"
         assert profile is None

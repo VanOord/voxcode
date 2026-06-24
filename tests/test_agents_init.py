@@ -6,8 +6,8 @@ import subprocess
 
 import pytest
 
-import ucode.agents as agents_mod
-from ucode.agents import (
+import voxcode.agents as agents_mod
+from voxcode.agents import (
     DEFAULT_TOOL,
     TOOL_SPECS,
     check_gateway_endpoint,
@@ -182,7 +182,7 @@ class TestResolveLaunchModel:
 
 class TestInstallToolBinary:
     def test_non_strict_returns_false_when_npm_missing(self, monkeypatch):
-        monkeypatch.setattr("ucode.agents.shutil.which", lambda _: None)
+        monkeypatch.setattr("voxcode.agents.shutil.which", lambda _: None)
 
         assert install_tool_binary("opencode", strict=False) is False
 
@@ -195,8 +195,8 @@ class TestInstallToolBinary:
         def fake_run(*args, **kwargs):
             raise subprocess.CalledProcessError(1, args[0])
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
 
         assert install_tool_binary("opencode", strict=False) is False
 
@@ -210,9 +210,9 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents._confirm_update_installed_tool_binary", lambda _: True)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents._confirm_update_installed_tool_binary", lambda _: True)
 
         assert install_tool_binary("opencode", strict=False, update_existing=True) is True
         assert calls == [["npm", "install", "-g", "opencode-ai"]]
@@ -231,11 +231,11 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents.opencode.is_update_available", lambda: None)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.opencode.is_update_available", lambda: None)
         monkeypatch.setattr(
-            "ucode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
+            "voxcode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
         )
 
         assert install_tool_binary("opencode", strict=False, update_existing=True) is True
@@ -256,11 +256,11 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents.opencode.is_update_available", lambda: ("1.2.3", "1.2.4"))
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.opencode.is_update_available", lambda: ("1.2.3", "1.2.4"))
         monkeypatch.setattr(
-            "ucode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
+            "voxcode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
         )
 
         assert install_tool_binary("opencode", strict=False, update_existing=True) is True
@@ -278,9 +278,9 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents._confirm_update_installed_tool_binary", lambda _: False)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents._confirm_update_installed_tool_binary", lambda _: False)
 
         assert install_tool_binary("opencode", strict=False, update_existing=True) is True
         assert calls == []
@@ -293,14 +293,14 @@ class TestInstallToolBinary:
         def fake_which(binary: str) -> str | None:
             return f"/usr/bin/{binary}"
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents._minimum_version_error", lambda _: None)
-        monkeypatch.setattr("ucode.agents._required_update_message", lambda _: None)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents._minimum_version_error", lambda _: None)
+        monkeypatch.setattr("voxcode.agents._required_update_message", lambda _: None)
 
         def boom(_tool: str) -> bool:
             raise AssertionError("optional update prompt should not be reached")
 
-        monkeypatch.setattr("ucode.agents._confirm_update_installed_tool_binary", boom)
+        monkeypatch.setattr("voxcode.agents._confirm_update_installed_tool_binary", boom)
 
         assert (
             install_tool_binary(
@@ -324,10 +324,10 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents._required_update_message", lambda _: "must upgrade")
-        monkeypatch.setattr("ucode.agents._minimum_version_error", lambda _: None)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents._required_update_message", lambda _: "must upgrade")
+        monkeypatch.setattr("voxcode.agents._minimum_version_error", lambda _: None)
 
         assert (
             install_tool_binary(
@@ -353,16 +353,16 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
         # The optional-update path must never be reached for a too-new tool.
         monkeypatch.setattr(
-            "ucode.agents._confirm_update_installed_tool_binary",
+            "voxcode.agents._confirm_update_installed_tool_binary",
             lambda _: (_ for _ in ()).throw(AssertionError("should not reach optional update")),
         )
         monkeypatch.setattr(
-            "ucode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
+            "voxcode.agents.prompt_yes_no", lambda prompt: prompt_calls.append(prompt) or True
         )
 
         assert install_tool_binary("gemini", strict=False, update_existing=True) is True
@@ -381,10 +381,10 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
-        monkeypatch.setattr("ucode.agents.prompt_yes_no", lambda prompt: False)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
+        monkeypatch.setattr("voxcode.agents.prompt_yes_no", lambda prompt: False)
 
         assert install_tool_binary("gemini", strict=False, update_existing=True) is True
         assert calls == []
@@ -401,11 +401,11 @@ class TestInstallToolBinary:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents.gemini.too_new_downgrade", lambda: ("0.45.0", "0.44.1"))
         monkeypatch.setattr(
-            "ucode.agents.prompt_yes_no",
+            "voxcode.agents.prompt_yes_no",
             lambda prompt: (_ for _ in ()).throw(AssertionError("should not prompt")),
         )
 
@@ -428,14 +428,14 @@ class TestInstallToolBinary:
         def fake_run(*args, **kwargs):
             raise subprocess.CalledProcessError(1, args[0])
 
-        monkeypatch.setattr("ucode.agents.shutil.which", fake_which)
-        monkeypatch.setattr("ucode.agents.subprocess.run", fake_run)
-        monkeypatch.setattr("ucode.agents._confirm_update_installed_tool_binary", lambda _: True)
+        monkeypatch.setattr("voxcode.agents.shutil.which", fake_which)
+        monkeypatch.setattr("voxcode.agents.subprocess.run", fake_run)
+        monkeypatch.setattr("voxcode.agents._confirm_update_installed_tool_binary", lambda _: True)
 
         assert install_tool_binary("opencode", strict=True, update_existing=True) is True
 
     def test_ensure_tool_binary_available_raises_when_missing(self, monkeypatch):
-        monkeypatch.setattr("ucode.agents.shutil.which", lambda _: None)
+        monkeypatch.setattr("voxcode.agents.shutil.which", lambda _: None)
 
         with pytest.raises(RuntimeError, match="OpenCode is not installed"):
             ensure_tool_binary_available("opencode")
@@ -445,8 +445,8 @@ class TestConfigureSelectedTools:
     def test_merges_with_existing_available_tools(self, monkeypatch):
         """Configuring a new tool should not drop previously-configured tools
         from state['available_tools']."""
-        monkeypatch.setattr("ucode.agents.configure_tool", lambda tool, state, model=None: state)
-        monkeypatch.setattr("ucode.agents.save_state", lambda s: None)
+        monkeypatch.setattr("voxcode.agents.configure_tool", lambda tool, state, model=None: state)
+        monkeypatch.setattr("voxcode.agents.save_state", lambda s: None)
 
         state = {
             "workspace": "https://x.databricks.com",
@@ -457,8 +457,8 @@ class TestConfigureSelectedTools:
         assert set(result["available_tools"]) == {"codex", "claude"}
 
     def test_adds_new_tool_to_available_tools(self, monkeypatch):
-        monkeypatch.setattr("ucode.agents.configure_tool", lambda tool, state, model=None: state)
-        monkeypatch.setattr("ucode.agents.save_state", lambda s: None)
+        monkeypatch.setattr("voxcode.agents.configure_tool", lambda tool, state, model=None: state)
+        monkeypatch.setattr("voxcode.agents.save_state", lambda s: None)
 
         state = {
             "workspace": "https://x.databricks.com",
@@ -469,8 +469,8 @@ class TestConfigureSelectedTools:
         assert set(result["available_tools"]) == {"codex", "claude"}
 
     def test_empty_selection_preserves_existing(self, monkeypatch):
-        monkeypatch.setattr("ucode.agents.configure_tool", lambda tool, state, model=None: state)
-        monkeypatch.setattr("ucode.agents.save_state", lambda s: None)
+        monkeypatch.setattr("voxcode.agents.configure_tool", lambda tool, state, model=None: state)
+        monkeypatch.setattr("voxcode.agents.save_state", lambda s: None)
 
         state = {"workspace": "https://x.databricks.com", "available_tools": ["codex"]}
         result = configure_selected_tools(state, [])
@@ -488,7 +488,7 @@ class TestValidateAllToolsVerbosity:
         return capsys.readouterr().out
 
     def test_normal_verbosity_renders_panels(self, monkeypatch, capsys):
-        import ucode.ui as ui_mod
+        import voxcode.ui as ui_mod
 
         monkeypatch.setattr(ui_mod, "_verbosity", "normal")
         out = self._run(monkeypatch, capsys)
@@ -497,7 +497,7 @@ class TestValidateAllToolsVerbosity:
         assert "Codex is working" in out
 
     def test_low_verbosity_omits_panels(self, monkeypatch, capsys):
-        import ucode.ui as ui_mod
+        import voxcode.ui as ui_mod
 
         monkeypatch.setattr(ui_mod, "_verbosity", "low")
         out = self._run(monkeypatch, capsys)

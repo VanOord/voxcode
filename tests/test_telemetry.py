@@ -1,11 +1,11 @@
-"""Tests for ucode.telemetry."""
+"""Tests for voxcode.telemetry."""
 
 from __future__ import annotations
 
 import subprocess
 from unittest.mock import patch
 
-from ucode import telemetry
+from voxcode import telemetry
 
 
 class TestUcodeVersion:
