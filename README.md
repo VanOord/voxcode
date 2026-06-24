@@ -1,3 +1,6 @@
+<img width="718" height="555" alt="image" src="https://github.com/user-attachments/assets/ea465b87-3525-41d3-9f05-4a745ba3701f" />
+
+
 # voxcode — Van Oord OpenCode Launcher
 
 `voxcode` is a thin CLI launcher that wraps [OpenCode](https://opencode.ai) and routes all LLM traffic through the Databricks AI Gateway on your workspace. No vendor API keys required — authentication is handled via Databricks OAuth or PAT.
