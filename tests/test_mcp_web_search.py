@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from ucode import mcp_web_search
+from voxcode import mcp_web_search
 
 WS = "https://example.databricks.com"
 

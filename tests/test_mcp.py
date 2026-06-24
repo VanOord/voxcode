@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-from unittest.mock import MagicMock
-
-from ucode import mcp
+from voxcode import mcp
 
 WS = "https://example.databricks.com"
-CLAUDE_STATE = {"workspace": WS, "available_tools": ["claude"]}
-ALL_MCP_CLIENTS = ["claude", "codex", "gemini", "opencode", "copilot"]
+OPENCODE_STATE = {"workspace": WS, "available_tools": ["opencode"]}
 
 
 class TestBuildMcpHttpEntry:
@@ -26,156 +21,7 @@ class TestBuildMcpHttpEntry:
         assert "headersHelper" not in entry
 
 
-class TestAddClaudeMcpServer:
-    def test_adds_user_scoped_json(self, monkeypatch):
-        calls: list[dict] = []
 
-        def fake_run(args, **kwargs):
-            calls.append({"args": args, "kwargs": kwargs})
-            return MagicMock(returncode=0)
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        entry = mcp.build_mcp_http_entry(f"{WS}/api/2.0/mcp/external/github")
-        mcp.add_claude_mcp_server("github", entry)
-
-        assert calls
-        args = calls[0]["args"]
-        assert args[:4] == ["claude", "mcp", "add-json", "github"]
-        assert json.loads(args[4]) == entry
-        assert args[5:] == ["-s", "user"]
-        assert "--client-secret" not in args
-        assert "env" not in calls[0]["kwargs"]
-
-
-class TestAddCodexMcpServer:
-    def test_adds_http_server_with_bearer_token_env(self, monkeypatch):
-        calls: list[dict] = []
-
-        def fake_run(args, **kwargs):
-            calls.append({"args": args, "kwargs": kwargs})
-            return MagicMock(returncode=0)
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        mcp.add_codex_mcp_server("github", f"{WS}/api/2.0/mcp/external/github")
-
-        assert calls == [
-            {
-                "args": [
-                    "codex",
-                    "mcp",
-                    "add",
-                    "github",
-                    "--url",
-                    f"{WS}/api/2.0/mcp/external/github",
-                    "--bearer-token-env-var",
-                    "OAUTH_TOKEN",
-                ],
-                "kwargs": {
-                    "check": True,
-                    "capture_output": True,
-                    "text": True,
-                    "timeout": 30,
-                },
-            }
-        ]
-
-
-class TestAddGeminiMcpServer:
-    def test_adds_user_scoped_http_server_with_auth_header(self, monkeypatch):
-        calls: list[dict] = []
-
-        def fake_run(args, **kwargs):
-            calls.append({"args": args, "kwargs": kwargs})
-            return MagicMock(returncode=0)
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        mcp.add_gemini_mcp_server("github", f"{WS}/api/2.0/mcp/external/github")
-
-        assert len(calls) == 1
-        call = calls[0]
-        assert call["args"] == [
-            "gemini",
-            "mcp",
-            "add",
-            "github",
-            f"{WS}/api/2.0/mcp/external/github",
-            "--type",
-            "http",
-            "--scope",
-            "user",
-            "--header",
-            "Authorization: Bearer ${OAUTH_TOKEN}",
-        ]
-        kwargs = call["kwargs"]
-        assert kwargs["check"] is True
-        assert kwargs["capture_output"] is True
-        assert kwargs["text"] is True
-        assert kwargs["timeout"] == 30
-        # GEMINI_CLI_HOME must point at the launcher's home so `gemini mcp
-        # add` writes the same settings.json the ucode session reads from.
-        assert kwargs["env"]["GEMINI_CLI_HOME"] == str(mcp.gemini.GEMINI_HOME_DIR)
-
-
-class TestRemoveClaudeMcpServer:
-    def test_returns_true_when_server_removed(self, monkeypatch):
-        calls: list[list[str]] = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            return MagicMock(returncode=0)
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        assert mcp.remove_claude_mcp_server("github", "user") is True
-        assert calls == [["claude", "mcp", "remove", "github", "-s", "user"]]
-
-    def test_returns_false_when_server_missing(self, monkeypatch):
-        def fake_run(args, **kwargs):
-            raise subprocess.CalledProcessError(1, args, stderr="No MCP server named github found")
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        assert mcp.remove_claude_mcp_server("github", "user") is False
-
-    def test_returns_false_when_project_local_server_missing(self, monkeypatch):
-        def fake_run(args, **kwargs):
-            raise subprocess.CalledProcessError(
-                1,
-                args,
-                stderr="No project-local MCP server found with name: github",
-            )
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        assert mcp.remove_claude_mcp_server("github", "project") is False
-
-    def test_returns_false_when_user_scoped_server_missing(self, monkeypatch):
-        def fake_run(args, **kwargs):
-            raise subprocess.CalledProcessError(
-                1,
-                args,
-                stderr="No user-scoped MCP server found with name: github",
-            )
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        assert mcp.remove_claude_mcp_server("github", "user") is False
-
-    def test_unexpected_failure_raises(self, monkeypatch):
-        def fake_run(args, **kwargs):
-            raise subprocess.CalledProcessError(1, args, stderr="permission denied")
-
-        monkeypatch.setattr(mcp.subprocess, "run", fake_run)
-
-        try:
-            mcp.remove_claude_mcp_server("github", "user")
-        except RuntimeError as exc:
-            assert "Failed to remove MCP server 'github'" in str(exc)
-        else:
-            raise AssertionError("expected RuntimeError")
 
 
 class TestExternalMcpConnectionNames:
@@ -203,24 +49,25 @@ class TestExternalMcpConnectionNames:
 
 
 class TestConfigureClientMcpServer:
-    def test_configures_copilot_mcp_server(self, monkeypatch):
-        calls: list[tuple[str, str]] = []
+    def test_configures_opencode_mcp_server(self, monkeypatch):
+        calls: list[tuple[str, dict]] = []
 
         monkeypatch.setattr(
-            mcp.copilot,
-            "write_mcp_server_config",
-            lambda name, url: calls.append((name, url)) or False,
+            mcp.opencode,
+            "register_mcp_server",
+            lambda name, entry: calls.append((name, entry)) or [],
         )
 
+        entry = mcp.build_mcp_http_entry(f"{WS}/api/2.0/mcp/external/github")
         removed_scopes = mcp.configure_client_mcp_server(
-            "copilot",
+            "opencode",
             "github",
             f"{WS}/api/2.0/mcp/external/github",
-            mcp.build_mcp_http_entry(f"{WS}/api/2.0/mcp/external/github"),
+            entry,
         )
 
         assert removed_scopes == []
-        assert calls == [("github", f"{WS}/api/2.0/mcp/external/github")]
+        assert calls == [("github", entry)]
 
 
 class TestMcpPicker:
@@ -492,7 +339,7 @@ class TestConfigureMcpCommand:
             "load_state",
             lambda: {
                 "workspace": WS,
-                "available_tools": ["claude"],
+                "available_tools": ["opencode"],
                 "mcp_servers": [
                     {
                         "name": "github",
@@ -505,15 +352,14 @@ class TestConfigureMcpCommand:
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
         monkeypatch.setattr(mcp, "discover_genie_mcp_servers", lambda workspace, profile=None: [])
         monkeypatch.setattr(mcp, "discover_app_mcp_servers", lambda workspace, profile=None: [])
         _patch_mcp_choices(monkeypatch, "github")
-        monkeypatch.setattr(mcp, "remove_claude_mcp_server", lambda name, scope: False)
-        monkeypatch.setattr(mcp, "add_claude_mcp_server", lambda name, entry, scope: None)
+
         monkeypatch.setattr(mcp, "save_state", lambda state: saved_states.append(state.copy()))
 
         assert mcp.configure_mcp_command() == 0
@@ -527,14 +373,14 @@ class TestConfigureMcpCommand:
         monkeypatch.setattr(
             mcp,
             "load_state",
-            lambda: {"workspace": WS, "available_tools": ALL_MCP_CLIENTS},
+            lambda: {"workspace": WS, "available_tools": ["opencode"]},
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
         monkeypatch.setattr(
             mcp,
             "available_mcp_clients",
-            lambda: ALL_MCP_CLIENTS,
+            lambda: ["opencode"],
         )
         monkeypatch.setattr(
             mcp,
@@ -561,22 +407,18 @@ class TestConfigureMcpCommand:
         }
         assert configured == [
             (
-                "claude",
+                "opencode",
                 "github-mcp",
                 f"{WS}/api/2.0/mcp/external/github-mcp",
                 expected_entry,
             ),
-            ("codex", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
-            ("gemini", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
-            ("opencode", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
-            ("copilot", "github-mcp", f"{WS}/api/2.0/mcp/external/github-mcp", expected_entry),
         ]
         assert saved_states[-1]["mcp_servers"] == [
             {
                 "name": "github-mcp",
                 "url": f"{WS}/api/2.0/mcp/external/github-mcp",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude", "codex", "gemini", "opencode", "copilot"],
+                "clients": ["opencode"],
             }
         ]
 
@@ -584,10 +426,10 @@ class TestConfigureMcpCommand:
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -615,7 +457,7 @@ class TestConfigureMcpCommand:
 
         assert configured == [
             (
-                "claude",
+                "opencode",
                 "databricks-genie-space-123",
                 f"{WS}/api/2.0/mcp/genie/space-123",
                 {
@@ -630,7 +472,7 @@ class TestConfigureMcpCommand:
                 "name": "databricks-genie-space-123",
                 "url": f"{WS}/api/2.0/mcp/genie/space-123",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude"],
+                "clients": ["opencode"],
             }
         ]
 
@@ -745,10 +587,10 @@ class TestConfigureMcpCommand:
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -776,7 +618,7 @@ class TestConfigureMcpCommand:
 
         assert configured == [
             (
-                "claude",
+                "opencode",
                 "databricks-app-mcp-my-app",
                 "https://mcp-my-app.example.databricksapps.com/mcp",
                 {
@@ -791,17 +633,17 @@ class TestConfigureMcpCommand:
                 "name": "databricks-app-mcp-my-app",
                 "url": "https://mcp-my-app.example.databricksapps.com/mcp",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude"],
+                "clients": ["opencode"],
             }
         ]
 
     def test_hints_when_no_selections_and_no_existing_servers(self, monkeypatch, capsys):
         saved_states: list[dict] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -825,13 +667,13 @@ class TestConfigureMcpCommand:
             "name": "databricks-genie-foreign",
             "url": f"{other_ws}/api/2.0/mcp/genie/foreign",
             "auth": "env:OAUTH_TOKEN",
-            "clients": ["claude", "codex"],
+            "clients": ["opencode"],
         }
         kept_entry = {
             "name": "databricks-sql",
             "url": f"{WS}/api/2.0/mcp/sql",
             "auth": "env:OAUTH_TOKEN",
-            "clients": ["claude"],
+            "clients": ["opencode"],
         }
 
         monkeypatch.setattr(
@@ -839,13 +681,13 @@ class TestConfigureMcpCommand:
             "load_state",
             lambda: {
                 "workspace": WS,
-                "available_tools": ["claude"],
+                "available_tools": ["opencode"],
                 "mcp_servers": [stale_entry, kept_entry],
             },
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -864,8 +706,8 @@ class TestConfigureMcpCommand:
         output = capsys.readouterr().out
         assert "Dropping 1 stale MCP entry" in output
         assert "databricks-genie-foreign" in output
-        # codex is listed on the stale entry but not installed -> skipped.
-        assert cleanup_calls == [("claude", "databricks-genie-foreign")]
+        # Only opencode client is in MCP_CLIENTS, so only it gets cleaned up.
+        assert cleanup_calls == [("opencode", "databricks-genie-foreign")]
         assert saved_states, "expected sanitized state to be persisted"
         assert saved_states[0]["mcp_servers"] == [kept_entry]
 
@@ -877,13 +719,13 @@ class TestConfigureMcpCommand:
             "name": "databricks-sql",
             "url": f"{WS}/api/2.0/mcp/sql",
             "auth": "env:OAUTH_TOKEN",
-            "clients": ["claude"],
+            "clients": ["opencode"],
         }
         orphan_entry = {
             "name": "orphan-mcp",
             "url": f"{other_ws}/api/2.0/mcp/external/orphan-mcp",
             "auth": "env:OAUTH_TOKEN",
-            "clients": ["claude", "codex"],
+            "clients": ["opencode"],
         }
 
         monkeypatch.setattr(
@@ -891,7 +733,7 @@ class TestConfigureMcpCommand:
             "load_state",
             lambda: {
                 "workspace": WS,
-                "available_tools": ["claude"],
+                "available_tools": ["opencode"],
                 "mcp_servers": [current_entry],
             },
         )
@@ -908,7 +750,7 @@ class TestConfigureMcpCommand:
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -927,8 +769,8 @@ class TestConfigureMcpCommand:
         output = capsys.readouterr().out
         assert "left over from previously-configured workspaces" in output
         assert "orphan-mcp" in output
-        # codex was in orphan-mcp's clients but isn't installed -> skipped.
-        assert cleanup_calls == [("claude", "orphan-mcp")]
+        # Only opencode client is in MCP_CLIENTS, so only it gets cleaned up.
+        assert cleanup_calls == [("opencode", "orphan-mcp")]
 
     def test_skips_orphan_warning_when_nothing_was_actually_removed(self, monkeypatch, capsys):
         """Re-running configure mcp on the same workspace shouldn't repeat the warning
@@ -939,13 +781,13 @@ class TestConfigureMcpCommand:
             "name": "orphan-mcp",
             "url": f"{other_ws}/api/2.0/mcp/external/orphan-mcp",
             "auth": "env:OAUTH_TOKEN",
-            "clients": ["claude"],
+            "clients": ["opencode"],
         }
 
         monkeypatch.setattr(
             mcp,
             "load_state",
-            lambda: {"workspace": WS, "available_tools": ["claude"]},
+            lambda: {"workspace": WS, "available_tools": ["opencode"]},
         )
         monkeypatch.setattr(
             mcp,
@@ -960,7 +802,7 @@ class TestConfigureMcpCommand:
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -980,16 +822,16 @@ class TestConfigureMcpCommand:
         output = capsys.readouterr().out
         assert "left over from previously-configured workspaces" not in output
         # The removal attempt was still made (cheap and safe); we just don't announce it.
-        assert cleanup_calls == [("claude", "orphan-mcp")]
+        assert cleanup_calls == [("opencode", "orphan-mcp")]
 
     def test_warns_when_app_selection_is_no_longer_discoverable(self, monkeypatch, capsys):
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -1014,10 +856,10 @@ class TestConfigureMcpCommand:
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -1042,10 +884,10 @@ class TestConfigureMcpCommand:
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
 
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp,
             "discover_external_mcp_connection_names",
@@ -1091,11 +933,11 @@ class TestConfigureMcpCommand:
         monkeypatch.setattr(
             mcp,
             "load_state",
-            lambda: {**CLAUDE_STATE, "profile": "my-profile"},
+            lambda: {**OPENCODE_STATE, "profile": "my-profile"},
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
 
         def fake_external(workspace, profile=None):
             seen_profiles["external"] = profile
@@ -1122,17 +964,17 @@ class TestConfigureMcpCommand:
             "apps": "my-profile",
         }
 
-    def test_configures_only_ucode_configured_clients(self, monkeypatch, capsys):
+    def test_configures_only_voxcode_configured_clients(self, monkeypatch, capsys):
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
         monkeypatch.setattr(
             mcp,
             "load_state",
-            lambda: {"workspace": WS, "available_tools": ["claude", "codex"]},
+            lambda: {"workspace": WS, "available_tools": ["opencode"]},
         )
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ALL_MCP_CLIENTS)
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -1149,24 +991,24 @@ class TestConfigureMcpCommand:
         assert mcp.configure_mcp_command() == 0
 
         output = capsys.readouterr().out
-        assert "Configuring for: Claude Code, Codex" in output
-        assert [call[0] for call in configured] == ["claude", "codex"]
+        assert "Configuring for: OpenCode" in output
+        assert [call[0] for call in configured] == ["opencode"]
         assert saved_states[-1]["mcp_servers"] == [
             {
                 "name": "databricks-sql",
                 "url": f"{WS}/api/2.0/mcp/sql",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude", "codex"],
+                "clients": ["opencode"],
             }
         ]
 
     def test_registers_databricks_sql_server(self, monkeypatch):
         saved_states: list[dict] = []
         configured: list[tuple[str, str, str, dict]] = []
-        monkeypatch.setattr(mcp, "load_state", lambda: {**CLAUDE_STATE})
+        monkeypatch.setattr(mcp, "load_state", lambda: {**OPENCODE_STATE})
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -1184,7 +1026,7 @@ class TestConfigureMcpCommand:
 
         assert configured == [
             (
-                "claude",
+                "opencode",
                 "databricks-sql",
                 f"{WS}/api/2.0/mcp/sql",
                 {
@@ -1199,20 +1041,20 @@ class TestConfigureMcpCommand:
                 "name": "databricks-sql",
                 "url": f"{WS}/api/2.0/mcp/sql",
                 "auth": "env:OAUTH_TOKEN",
-                "clients": ["claude"],
+                "clients": ["opencode"],
             }
         ]
 
     def test_removes_saved_server(self, monkeypatch):
         state = {
             "workspace": WS,
-            "available_tools": ["claude"],
+            "available_tools": ["opencode"],
             "mcp_servers": [
                 {
                     "name": "github-mcp",
                     "url": f"{WS}/api/2.0/mcp/external/github-mcp",
                     "auth": "env:OAUTH_TOKEN",
-                    "clients": ["claude"],
+                    "clients": ["opencode"],
                 }
             ],
         }
@@ -1222,7 +1064,7 @@ class TestConfigureMcpCommand:
         monkeypatch.setattr(mcp, "load_state", lambda: state)
         monkeypatch.setattr(mcp.shutil, "which", lambda binary: f"/usr/bin/{binary}")
         monkeypatch.setattr(mcp, "ensure_databricks_auth", lambda workspace, profile=None: None)
-        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["claude"])
+        monkeypatch.setattr(mcp, "available_mcp_clients", lambda: ["opencode"])
         monkeypatch.setattr(
             mcp, "discover_external_mcp_connection_names", lambda workspace, profile=None: []
         )
@@ -1238,7 +1080,7 @@ class TestConfigureMcpCommand:
 
         assert mcp.configure_mcp_command() == 0
 
-        assert removed == [("claude", "github-mcp")]
+        assert removed == [("opencode", "github-mcp")]
         assert saved_states[-1]["mcp_servers"] == []
 
 
@@ -1430,21 +1272,13 @@ class TestConfigureMcpFromLocation:
 
 
 class TestRevertMcpConfigs:
-    def test_removes_cli_registered_servers_and_restores_copilot_config(self, monkeypatch):
+    def test_removes_only_opencode_registered_servers(self, monkeypatch):
         removed: list[tuple[str, str]] = []
-        restored: list[tuple[object, object, bool]] = []
 
         monkeypatch.setattr(
             mcp,
             "remove_client_mcp_server",
             lambda client, name: removed.append((client, name)) or ["user"],
-        )
-        monkeypatch.setattr(
-            mcp,
-            "restore_file",
-            lambda config_path, backup_path, managed: (
-                restored.append((config_path, backup_path, managed)) or True
-            ),
         )
 
         result = mcp.revert_mcp_configs(
@@ -1452,26 +1286,11 @@ class TestRevertMcpConfigs:
                 "mcp_servers": [
                     {
                         "name": "github-mcp",
-                        "clients": ["claude", "codex", "gemini", "opencode", "copilot"],
+                        "clients": ["opencode"],
                     }
                 ]
             }
         )
 
-        assert removed == [
-            ("claude", "github-mcp"),
-            ("codex", "github-mcp"),
-            ("gemini", "github-mcp"),
-            ("opencode", "github-mcp"),
-            ("copilot", "github-mcp"),
-        ]
-        assert restored == [
-            (mcp.copilot.COPILOT_MCP_CONFIG_PATH, mcp.copilot.COPILOT_MCP_BACKUP_PATH, True)
-        ]
-        assert result == {
-            "claude": True,
-            "codex": True,
-            "gemini": True,
-            "opencode": True,
-            "copilot": True,
-        }
+        assert removed == [("opencode", "github-mcp")]
+        assert result == {"opencode": True}

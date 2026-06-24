@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-import ucode.usage as usage_mod
-from ucode.usage import (
+import voxcode.usage as usage_mod
+from voxcode.usage import (
     USAGE_BREAKDOWN_DAYS,
     USAGE_SUMMARY_DAYS,
     build_current_user_query,

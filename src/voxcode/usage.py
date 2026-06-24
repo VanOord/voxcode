@@ -10,15 +10,15 @@ from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from typing import cast
 
-from ucode.databricks import (
+from voxcode.databricks import (
     apply_pat_environment,
     discover_sql_warehouse_http_path,
     ensure_databricks_auth,
     get_databricks_token,
     run_usage_query,
 )
-from ucode.state import load_state
-from ucode.ui import (
+from voxcode.state import load_state
+from voxcode.ui import (
     console,
     format_duration,
     format_token_count,
@@ -439,12 +439,12 @@ def render_usage_summary(
 
 def usage() -> int:
     # Late import to avoid circular import (agents → state, but usage uses TOOL_SPECS for displays).
-    from ucode.agents import TOOL_SPECS
+    from voxcode.agents import TOOL_SPECS
 
     state = load_state()
     workspace = state.get("workspace")
     if not workspace:
-        raise RuntimeError("Workspace is not configured. Run `ucode configure` first.")
+        raise RuntimeError("Workspace is not configured. Run `voxcode configure` first.")
 
     profile = state.get("profile")
     apply_pat_environment(state)
@@ -476,7 +476,7 @@ def usage() -> int:
     table_widths = [8, 5, 10, 8, 8, 24]
 
     if not configured_tools:
-        print_note("No coding agents configured. Run `ucode configure` to set up agents.")
+        print_note("No coding agents configured. Run `voxcode configure` to set up agents.")
         return 0
 
     for tool in configured_tools:

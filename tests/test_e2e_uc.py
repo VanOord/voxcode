@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import pytest
 
-from ucode.cli import configure_shared_state
-from ucode.databricks import (
+from voxcode.cli import configure_shared_state
+from voxcode.databricks import (
     discover_model_services,
     list_mcp_services,
 )
-from ucode.state import load_state
+from voxcode.state import load_state
 
 
 def _has_uc_models(workspace: str, token: str) -> bool:

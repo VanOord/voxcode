@@ -8,8 +8,8 @@ import subprocess
 
 import pytest
 
-import ucode.databricks as db_mod
-from ucode.databricks import (
+import voxcode.databricks as db_mod
+from voxcode.databricks import (
     AI_GATEWAY_V2_DOCS_URL,
     _format_subprocess_result,
     _parse_databricks_cli_version,
@@ -1118,8 +1118,8 @@ class TestEnsureAiGatewayV2:
         from unittest.mock import patch
 
         exc = self._http_error(404, "Not Found")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
-            from ucode.databricks import ensure_ai_gateway_v2
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             with pytest.raises(RuntimeError, match=AI_GATEWAY_V2_DOCS_URL) as excinfo:
                 ensure_ai_gateway_v2(WS, "fake-token")
@@ -1129,8 +1129,8 @@ class TestEnsureAiGatewayV2:
         from unittest.mock import patch
 
         exc = self._http_error(401, "Unauthorized")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
-            from ucode.databricks import ensure_ai_gateway_v2
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             with pytest.raises(RuntimeError, match="401") as excinfo:
                 ensure_ai_gateway_v2(WS, "fake-token")
@@ -1143,8 +1143,8 @@ class TestEnsureAiGatewayV2:
         from unittest.mock import patch
 
         exc = self._http_error(400, "Bad Request", body="Invalid Token")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
-            from ucode.databricks import ensure_ai_gateway_v2
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             with pytest.raises(RuntimeError) as excinfo:
                 ensure_ai_gateway_v2(WS, "fake-token")
@@ -1161,8 +1161,8 @@ class TestEnsureAiGatewayV2:
         from unittest.mock import patch
 
         exc = self._http_error(400, "Bad Request", body="some other detail")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
-            from ucode.databricks import ensure_ai_gateway_v2
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             with pytest.raises(RuntimeError, match=AI_GATEWAY_V2_DOCS_URL) as excinfo:
                 ensure_ai_gateway_v2(WS, "fake-token")
@@ -1173,10 +1173,10 @@ class TestEnsureAiGatewayV2:
         from urllib.error import URLError
 
         with patch(
-            "ucode.databricks.urllib_request.urlopen",
+            "voxcode.databricks.urllib_request.urlopen",
             side_effect=URLError("connection refused"),
         ):
-            from ucode.databricks import ensure_ai_gateway_v2
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             with pytest.raises(RuntimeError, match=AI_GATEWAY_V2_DOCS_URL):
                 ensure_ai_gateway_v2(WS, "fake-token")
@@ -1185,10 +1185,10 @@ class TestEnsureAiGatewayV2:
         from unittest.mock import patch
 
         with patch(
-            "ucode.databricks.urllib_request.urlopen",
+            "voxcode.databricks.urllib_request.urlopen",
             return_value=self._mock_json_response('{"endpoints": [{"name": "foo"}]}'),
         ):
-            from ucode.databricks import ensure_ai_gateway_v2
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             ensure_ai_gateway_v2(WS, "fake-token")  # should not raise
 
@@ -1198,10 +1198,10 @@ class TestEnsureAiGatewayV2:
         # A 200 with no endpoints still means v2 is wired up on this workspace —
         # downstream discovery will surface "no models" with a clearer reason.
         with patch(
-            "ucode.databricks.urllib_request.urlopen",
+            "voxcode.databricks.urllib_request.urlopen",
             return_value=self._mock_json_response('{"endpoints": []}'),
         ):
-            from ucode.databricks import ensure_ai_gateway_v2
+            from voxcode.databricks import ensure_ai_gateway_v2
 
             ensure_ai_gateway_v2(WS, "fake-token")  # should not raise
 
@@ -1223,10 +1223,10 @@ class TestHttpGetJsonReason:
     def test_reason_includes_body_on_http_error(self):
         from unittest.mock import patch
 
-        from ucode.databricks import _http_get_json
+        from voxcode.databricks import _http_get_json
 
         exc = self._http_error(400, "Bad Request", body="Invalid Token")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
             payload, reason = _http_get_json("https://x/y", "tok")
         assert payload is None
         assert "HTTP 400" in reason
@@ -1235,10 +1235,10 @@ class TestHttpGetJsonReason:
     def test_reason_without_body_is_status_only(self):
         from unittest.mock import patch
 
-        from ucode.databricks import _http_get_json
+        from voxcode.databricks import _http_get_json
 
         exc = self._http_error(404, "Not Found")
-        with patch("ucode.databricks.urllib_request.urlopen", side_effect=exc):
+        with patch("voxcode.databricks.urllib_request.urlopen", side_effect=exc):
             payload, reason = _http_get_json("https://x/y", "tok")
         assert payload is None
         assert reason == "HTTP 404 Not Found"
@@ -1273,7 +1273,7 @@ class TestEnsureDatabricksCliVersion:
         ensure_databricks_cli_version()
 
     def test_auto_upgrades_when_version_too_old(self, tmp_path, monkeypatch):
-        import ucode.databricks as db_mod
+        import voxcode.databricks as db_mod
 
         env = self._fake_databricks(tmp_path, "Databricks CLI v0.297.0")
         monkeypatch.setattr("os.environ", env)

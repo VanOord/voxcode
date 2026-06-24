@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from ucode.cli import app
+from voxcode.cli import app
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -29,13 +29,13 @@ TOOLS = ["codex", "claude", "gemini", "opencode"]
 def no_state_writes():
     """Prevent any test from writing to the real state file on disk."""
     with (
-        patch("ucode.state.save_state"),
-        patch("ucode.cli.save_state"),
-        patch("ucode.agents.__init__.save_state"),
-        patch("ucode.agents.codex.save_state"),
-        patch("ucode.agents.claude.save_state"),
-        patch("ucode.agents.gemini.save_state"),
-        patch("ucode.agents.opencode.save_state"),
+        patch("voxcode.state.save_state"),
+        patch("voxcode.cli.save_state"),
+        patch("voxcode.agents.__init__.save_state"),
+        patch("voxcode.agents.codex.save_state"),
+        patch("voxcode.agents.claude.save_state"),
+        patch("voxcode.agents.gemini.save_state"),
+        patch("voxcode.agents.opencode.save_state"),
     ):
         yield
 
@@ -96,25 +96,25 @@ def _patch_launch(tool: str):
     also stubbed to avoid the launch-time refetch hitting the network.
     """
     return [
-        patch("ucode.cli.ensure_bootstrap_dependencies"),
-        patch("ucode.cli.load_state", return_value=MINIMAL_STATE),
+        patch("voxcode.cli.ensure_bootstrap_dependencies"),
+        patch("voxcode.cli.load_state", return_value=MINIMAL_STATE),
         patch(
-            "ucode.cli.ensure_provider_state",
+            "voxcode.cli.ensure_provider_state",
             return_value=MINIMAL_STATE,
         ),
         patch(
-            "ucode.cli.configure_shared_state",
+            "voxcode.cli.configure_shared_state",
             return_value=MINIMAL_STATE,
         ),
         patch(
-            "ucode.cli.resolve_launch_model",
+            "voxcode.cli.resolve_launch_model",
             return_value=(MINIMAL_STATE, "databricks-claude-sonnet-4"),
         ),
         patch(
-            "ucode.cli.configure_tool",
+            "voxcode.cli.configure_tool",
             return_value=MINIMAL_STATE,
         ),
-        patch("ucode.cli.launch_agent"),
+        patch("voxcode.cli.launch_agent"),
     ]
 
 
@@ -157,7 +157,7 @@ class TestMcpSubcommands:
 
 class TestStatus:
     def test_shows_mcp_list_commands(self):
-        with patch("ucode.cli.load_state", return_value=MINIMAL_STATE):
+        with patch("voxcode.cli.load_state", return_value=MINIMAL_STATE):
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0, result.output
@@ -187,7 +187,7 @@ class TestStatus:
                 },
             ],
         }
-        with patch("ucode.cli.load_state", return_value=state):
+        with patch("voxcode.cli.load_state", return_value=state):
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0, result.output
@@ -216,7 +216,7 @@ class TestStatus:
                 }
             ],
         }
-        with patch("ucode.cli.load_state", return_value=state):
+        with patch("voxcode.cli.load_state", return_value=state):
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0, result.output
@@ -239,15 +239,15 @@ class TestRevert:
         cleared: list[bool] = []
 
         with (
-            patch("ucode.cli.load_state", return_value=state),
-            patch("ucode.cli.restore_file", return_value=False),
+            patch("voxcode.cli.load_state", return_value=state),
+            patch("voxcode.cli.restore_file", return_value=False),
             patch(
-                "ucode.cli.revert_mcp_configs",
+                "voxcode.cli.revert_mcp_configs",
                 side_effect=lambda loaded_state: (
                     reverted_mcp.append(loaded_state) or {"claude": True}
                 ),
             ),
-            patch("ucode.cli.clear_state", side_effect=lambda: cleared.append(True)),
+            patch("voxcode.cli.clear_state", side_effect=lambda: cleared.append(True)),
         ):
             result = runner.invoke(app, ["revert"])
 
@@ -263,20 +263,20 @@ class TestAutoConfigureOnFirstRun:
         empty_state = {}
         configured_state = {**MINIMAL_STATE}
         with (
-            patch("ucode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
-            patch("ucode.cli.load_state", return_value=empty_state),
-            patch("ucode.cli._auto_configure_tool") as mock_auto,
-            patch("ucode.cli.configure_shared_state", return_value=MINIMAL_STATE),
+            patch("voxcode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
+            patch("voxcode.cli.load_state", return_value=empty_state),
+            patch("voxcode.cli._auto_configure_tool") as mock_auto,
+            patch("voxcode.cli.configure_shared_state", return_value=MINIMAL_STATE),
             patch(
-                "ucode.cli.ensure_provider_state",
+                "voxcode.cli.ensure_provider_state",
                 return_value=configured_state,
             ),
             patch(
-                "ucode.cli.resolve_launch_model",
+                "voxcode.cli.resolve_launch_model",
                 return_value=(configured_state, "databricks-claude-sonnet-4"),
             ),
-            patch("ucode.cli.configure_tool", return_value=configured_state),
-            patch("ucode.cli.launch_agent"),
+            patch("voxcode.cli.configure_tool", return_value=configured_state),
+            patch("voxcode.cli.launch_agent"),
         ):
             result = runner.invoke(app, ["claude"])
         assert result.exit_code == 0, result.output
@@ -287,20 +287,20 @@ class TestAutoConfigureOnFirstRun:
         """Auto-configure runs when workspace exists but the tool wasn't configured."""
         state_without_tool = {**MINIMAL_STATE, "available_tools": ["codex"]}
         with (
-            patch("ucode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
-            patch("ucode.cli.load_state", return_value=state_without_tool),
-            patch("ucode.cli._auto_configure_tool") as mock_auto,
-            patch("ucode.cli.configure_shared_state", return_value=MINIMAL_STATE),
+            patch("voxcode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
+            patch("voxcode.cli.load_state", return_value=state_without_tool),
+            patch("voxcode.cli._auto_configure_tool") as mock_auto,
+            patch("voxcode.cli.configure_shared_state", return_value=MINIMAL_STATE),
             patch(
-                "ucode.cli.ensure_provider_state",
+                "voxcode.cli.ensure_provider_state",
                 return_value=MINIMAL_STATE,
             ),
             patch(
-                "ucode.cli.resolve_launch_model",
+                "voxcode.cli.resolve_launch_model",
                 return_value=(MINIMAL_STATE, "databricks-claude-sonnet-4"),
             ),
-            patch("ucode.cli.configure_tool", return_value=MINIMAL_STATE),
-            patch("ucode.cli.launch_agent"),
+            patch("voxcode.cli.configure_tool", return_value=MINIMAL_STATE),
+            patch("voxcode.cli.launch_agent"),
         ):
             result = runner.invoke(app, ["claude"])
         assert result.exit_code == 0, result.output
@@ -310,20 +310,20 @@ class TestAutoConfigureOnFirstRun:
     def test_skipped_when_already_configured(self):
         """Auto-configure is skipped when workspace and tool are already set up."""
         with (
-            patch("ucode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
-            patch("ucode.cli.load_state", return_value=MINIMAL_STATE),
-            patch("ucode.cli._auto_configure_tool") as mock_auto,
-            patch("ucode.cli.configure_shared_state", return_value=MINIMAL_STATE),
+            patch("voxcode.cli.ensure_bootstrap_dependencies") as mock_bootstrap,
+            patch("voxcode.cli.load_state", return_value=MINIMAL_STATE),
+            patch("voxcode.cli._auto_configure_tool") as mock_auto,
+            patch("voxcode.cli.configure_shared_state", return_value=MINIMAL_STATE),
             patch(
-                "ucode.cli.ensure_provider_state",
+                "voxcode.cli.ensure_provider_state",
                 return_value=MINIMAL_STATE,
             ),
             patch(
-                "ucode.cli.resolve_launch_model",
+                "voxcode.cli.resolve_launch_model",
                 return_value=(MINIMAL_STATE, "databricks-claude-sonnet-4"),
             ),
-            patch("ucode.cli.configure_tool", return_value=MINIMAL_STATE),
-            patch("ucode.cli.launch_agent"),
+            patch("voxcode.cli.configure_tool", return_value=MINIMAL_STATE),
+            patch("voxcode.cli.launch_agent"),
         ):
             runner.invoke(app, ["claude"])
         mock_bootstrap.assert_called_once_with("claude", update_existing=False)
@@ -377,9 +377,9 @@ class TestPassthroughArgs:
 class TestConfigureAgentFlag:
     def test_no_flag_calls_configure_all(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure"])
         assert result.exit_code == 0, result.output
@@ -387,9 +387,9 @@ class TestConfigureAgentFlag:
 
     def test_agents_flag_calls_configure_with_tools(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary") as mock_install,
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary") as mock_install,
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agents", "claude,codex"])
         assert result.exit_code == 0, result.output
@@ -401,9 +401,9 @@ class TestConfigureAgentFlag:
 
     def test_agents_flag_normalizes_aliases_and_dedupes(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agents", " claude-code, codex,claude "])
         assert result.exit_code == 0, result.output
@@ -414,9 +414,9 @@ class TestConfigureAgentFlag:
 
     def test_workspaces_flag_calls_configure_with_workspaces(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -437,9 +437,9 @@ class TestConfigureAgentFlag:
 
     def test_agents_and_workspaces_flags_call_configure_with_both(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -454,9 +454,9 @@ class TestConfigureAgentFlag:
 
     def test_agent_and_workspaces_flags_call_configure_with_both(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary") as mock_install,
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary") as mock_install,
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -470,9 +470,9 @@ class TestConfigureAgentFlag:
 
     def test_agent_flag_calls_configure_with_tool(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary") as mock_install,
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary") as mock_install,
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agent", "claude"])
         assert result.exit_code == 0, result.output
@@ -483,9 +483,9 @@ class TestConfigureAgentFlag:
 
     def test_skip_upgrade_flag_disables_optional_update_prompt(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--skip-upgrade"])
         assert result.exit_code == 0, result.output
@@ -493,9 +493,9 @@ class TestConfigureAgentFlag:
 
     def test_skip_upgrade_flag_with_agent_skips_optional_update(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary") as mock_install,
-            patch("ucode.cli.configure_workspace_command"),
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary") as mock_install,
+            patch("voxcode.cli.configure_workspace_command"),
         ):
             result = runner.invoke(app, ["configure", "--agent", "claude", "--skip-upgrade"])
         assert result.exit_code == 0, result.output
@@ -505,9 +505,9 @@ class TestConfigureAgentFlag:
 
     def test_skip_upgrade_flag_with_agents_forwards_to_configure(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agents", "claude,codex", "--skip-upgrade"])
         assert result.exit_code == 0, result.output
@@ -518,9 +518,9 @@ class TestConfigureAgentFlag:
 
     def test_agent_flag_normalizes_alias(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agent", "claude-code"])
         assert result.exit_code == 0, result.output
@@ -544,9 +544,9 @@ class TestConfigureAgentFlag:
 
     def test_agent_flag_rejects_unknown(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agent", "bogus"])
         assert result.exit_code != 0
@@ -554,9 +554,9 @@ class TestConfigureAgentFlag:
 
     def test_agents_flag_rejects_unknown(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agents", "claude,bogus"])
         assert result.exit_code != 0
@@ -566,9 +566,9 @@ class TestConfigureAgentFlag:
 
     def test_agents_flag_rejects_empty_list(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agents", ","])
         assert result.exit_code != 0
@@ -576,9 +576,9 @@ class TestConfigureAgentFlag:
 
     def test_agent_and_agents_flags_are_mutually_exclusive(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agent", "claude", "--agents", "codex"])
         assert result.exit_code != 0
@@ -586,9 +586,9 @@ class TestConfigureAgentFlag:
 
     def test_workspaces_flag_rejects_empty_list(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--workspaces", ","])
         assert result.exit_code != 0
@@ -597,7 +597,7 @@ class TestConfigureAgentFlag:
 
 class TestConfigureAgentsSelection:
     def test_selected_tools_skip_picker(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         state = {**MINIMAL_STATE, "available_tools": []}
         monkeypatch.setattr(
@@ -635,7 +635,7 @@ class TestConfigureAgentsSelection:
         assert configured == [["claude", "codex"]]
 
     def test_unavailable_selected_tool_errors_before_configure(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         state = {**MINIMAL_STATE, "available_tools": []}
         monkeypatch.setattr(
@@ -656,7 +656,7 @@ class TestConfigureAgentsSelection:
             cli_mod.configure_workspace_command(selected_tools=["claude", "codex"])
 
     def test_multiple_workspaces_configure_all_and_use_first(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         states = {
             "https://first.com": {**MINIMAL_STATE, "workspace": "https://first.com"},
@@ -710,7 +710,7 @@ class TestConfigureAgentsSelection:
 class TestParseProfilesOption:
     @staticmethod
     def _patch_profiles(monkeypatch, entries):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         monkeypatch.setattr(cli_mod, "list_profile_entries", lambda: entries)
         return cli_mod
@@ -758,10 +758,10 @@ class TestConfigureProfilesFlag:
 
     def test_profiles_flag_resolves_workspaces(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--profiles", "DEFAULT"])
         assert result.exit_code == 0, result.output
@@ -774,10 +774,10 @@ class TestConfigureProfilesFlag:
 
     def test_profiles_flag_with_agents(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app, ["configure", "--agents", "claude,codex", "--profiles", "DEFAULT"]
@@ -791,10 +791,10 @@ class TestConfigureProfilesFlag:
 
     def test_profiles_flag_with_agent(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(app, ["configure", "--agent", "claude", "--profiles", "DEFAULT"])
         assert result.exit_code == 0, result.output
@@ -805,10 +805,10 @@ class TestConfigureProfilesFlag:
 
     def test_use_pat_and_skip_validate_are_forwarded(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.install_tool_binary"),
-            patch("ucode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.install_tool_binary"),
+            patch("voxcode.cli.list_profile_entries", return_value=self.PROFILE_ENTRIES),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -833,8 +833,8 @@ class TestConfigureProfilesFlag:
 
     def test_use_pat_requires_profiles(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -846,8 +846,8 @@ class TestConfigureProfilesFlag:
 
     def test_profiles_and_workspaces_are_mutually_exclusive(self):
         with (
-            patch("ucode.cli.install_databricks_cli"),
-            patch("ucode.cli.configure_workspace_command") as mock_cfg,
+            patch("voxcode.cli.install_databricks_cli"),
+            patch("voxcode.cli.configure_workspace_command") as mock_cfg,
         ):
             result = runner.invoke(
                 app,
@@ -885,7 +885,7 @@ class TestConfigureSharedStateUsePat:
 
     @staticmethod
     def _stub_deps(monkeypatch, *, pat_token, existing_state=None):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         logins: list[tuple] = []
         ensures: list[tuple] = []
@@ -1013,7 +1013,7 @@ class TestConfigureSharedStateUsePat:
 
 class TestConfigureSkipValidate:
     def test_skip_validate_skips_agent_validation(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         state = {**MINIMAL_STATE, "workspace": "https://first.com"}
         monkeypatch.setattr(cli_mod, "configure_shared_state", lambda *a, **k: state)
@@ -1038,7 +1038,7 @@ class TestConfigureSkipValidate:
         assert validated == []
 
     def test_skip_validate_skips_single_tool_validation(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         state = {**MINIMAL_STATE, "workspace": "https://first.com"}
         monkeypatch.setattr(cli_mod, "configure_shared_state", lambda *a, **k: state)
@@ -1062,7 +1062,7 @@ class TestConfigureSharedStateMcpCleanup:
 
     @staticmethod
     def _stub_external_deps(monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         monkeypatch.setattr(cli_mod, "normalize_workspace_url", lambda w: w)
         monkeypatch.setattr(cli_mod, "run_databricks_login", lambda w, p: None)
@@ -1077,7 +1077,7 @@ class TestConfigureSharedStateMcpCleanup:
         monkeypatch.setattr(cli_mod, "build_shared_base_urls", lambda w: {})
 
     def test_purges_residue_when_workspace_changes(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         self._stub_external_deps(monkeypatch)
         monkeypatch.setattr(
@@ -1097,7 +1097,7 @@ class TestConfigureSharedStateMcpCleanup:
         assert called_workspace == "https://new.databricks.com"
 
     def test_skips_purge_when_workspace_unchanged(self, monkeypatch):
-        import ucode.cli as cli_mod
+        import voxcode.cli as cli_mod
 
         self._stub_external_deps(monkeypatch)
         monkeypatch.setattr(

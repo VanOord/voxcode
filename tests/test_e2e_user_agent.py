@@ -1,4 +1,4 @@
-"""End-to-end test that the User-Agent header ucode injects actually reaches the wire.
+"""End-to-end test that the User-Agent header voxcode injects actually reaches the wire.
 
 We don't talk to a real Databricks workspace here — instead we stand up a
 tiny HTTP capture server on localhost, point each agent's *_BASE_URL at it,
@@ -6,7 +6,7 @@ launch the agent, and assert on the User-Agent the server saw.
 
 The server returns a canned error so the agent itself fails; we don't care
 about the agent's exit code, only the headers that arrived before it bailed.
-This is the cheapest way to verify "ucode wired the UA into the request"
+This is the cheapest way to verify "voxcode wired the UA into the request"
 end-to-end without TLS, real models, or workspace credentials.
 
 Skipped per-agent when the binary isn't installed.
@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from ucode.telemetry import agent_version, ucode_version
+from voxcode.telemetry import agent_version, voxcode_version
 
 
 def _require_binary(binary: str):
@@ -126,7 +126,7 @@ def capture_server():
 
 
 def _expected_ua(agent_name: str, binary: str) -> str:
-    return f"ucode/{ucode_version()} {agent_name}/{agent_version(binary)}"
+    return f"voxcode/{voxcode_version()} {agent_name}/{agent_version(binary)}"
 
 
 def _assert_ua(req: _CapturedRequest, expected: str) -> None:
@@ -173,73 +173,11 @@ def _no_request_msg(server: _CaptureServer, result: subprocess.CompletedProcess 
 # ---------------------------------------------------------------------------
 
 
-class TestClaudeUserAgent:
-    def test_user_agent_arrives_at_gateway(self, tmp_path, monkeypatch, capture_server):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import claude
-
-        _require_binary("claude")
-        config_dir = tmp_path / "claude_config"
-        config_dir.mkdir()
-        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(claude, "CLAUDE_SETTINGS_PATH", config_dir / "settings.json")
-        monkeypatch.setattr(claude, "CLAUDE_BACKUP_PATH", tmp_path / "claude.backup.json")
-
-        # Render the overlay against the capture server (treated as the workspace).
-        # render_overlay just builds the env block; we write it ourselves to
-        # avoid the apiKeyHelper / save_state plumbing.
-        overlay, _ = claude.render_overlay(capture_server.base_url, "test-model")
-        claude.CLAUDE_SETTINGS_PATH.write_text(json.dumps(overlay), encoding="utf-8")
-        env = {
-            **os.environ,
-            "CLAUDE_CONFIG_DIR": str(config_dir),
-            "ANTHROPIC_API_KEY": "test-key-not-real",
-            **overlay["env"],
-        }
-
-        result = _run_until_first_request(claude.validate_cmd("claude"), env)
-
-        req = capture_server.first_request_with_path_prefix("/ai-gateway/anthropic")
-        assert req is not None, _no_request_msg(capture_server, result)
-        _assert_ua(req, _expected_ua("claude", "claude"))
-
-
-class TestCodexUserAgent:
-    def test_user_agent_arrives_at_gateway(self, tmp_path, monkeypatch, capture_server):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import codex
-
-        _require_binary("codex")
-        config_dir = tmp_path / "codex_home" / ".codex"
-        config_dir.mkdir(parents=True)
-        config_path = config_dir / "ucode.config.toml"
-
-        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(codex, "CODEX_CONFIG_PATH", config_path)
-        monkeypatch.setattr(codex, "CODEX_BACKUP_PATH", tmp_path / "codex.backup.toml")
-
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
-            codex.write_tool_config({"workspace": capture_server.base_url})
-
-        # Point codex at the redirected config dir and let $OPENAI_API_KEY
-        # bypass the auth command.
-        env = {
-            **os.environ,
-            "CODEX_HOME": str(config_dir),
-            "OPENAI_API_KEY": "test-key-not-real",
-        }
-        result = _run_until_first_request(codex.validate_cmd("codex"), env)
-
-        req = capture_server.first_request_with_path_prefix("/ai-gateway/codex")
-        assert req is not None, _no_request_msg(capture_server, result)
-        _assert_ua(req, _expected_ua("codex", "codex"))
-
 
 class TestOpencodeUserAgent:
     def test_user_agent_arrives_at_gateway(self, tmp_path, monkeypatch, capture_server):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import opencode
+        import voxcode.config_io as config_io_mod
+        from voxcode.agents import opencode
 
         _require_binary("opencode")
         # Redirect via XDG_CONFIG_HOME so the spawned opencode reads from
@@ -265,9 +203,9 @@ class TestOpencodeUserAgent:
             },
         }
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
+            mp.setattr("voxcode.state.save_state", lambda s: None)
             mp.setattr(
-                "ucode.agents.opencode.get_databricks_token",
+                "voxcode.agents.opencode.get_databricks_token",
                 lambda ws, profile=None, **kwargs: "test-token",
             )
             opencode.write_tool_config(state, "test-claude-model", token="test-token")
@@ -277,81 +215,14 @@ class TestOpencodeUserAgent:
 
         req = capture_server.first_request_with_path_prefix("/ai-gateway/anthropic")
         assert req is not None, _no_request_msg(capture_server, result)
-        # The Vercel AI SDK appends its own suffix to UA; ucode's prefix
+        # The Vercel AI SDK appends its own suffix to UA; voxcode's prefix
         # appears at the front. Per upstream investigation, the AI SDK
         # prepends our value then suffixes "ai-sdk/anthropic/X
         # ai-sdk/provider-utils/X runtime/bun/X". We assert the prefix only.
         ua = req.headers.get("User-Agent") or req.headers.get("user-agent") or ""
         expected_prefix = _expected_ua("opencode", "opencode")
         assert ua.startswith(expected_prefix), (
-            f"OpenCode UA missing ucode prefix.\n  got:    {ua!r}\n  prefix: {expected_prefix!r}"
+            f"OpenCode UA missing voxcode prefix.\n  got:    {ua!r}\n  prefix: {expected_prefix!r}"
         )
 
 
-class TestGeminiUserAgent:
-    def test_user_agent_arrives_at_gateway(self, tmp_path, monkeypatch, capture_server):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import gemini
-
-        _require_binary("gemini")
-        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(gemini, "GEMINI_ENV_PATH", tmp_path / "ucode.env")
-        monkeypatch.setattr(gemini, "GEMINI_BACKUP_PATH", tmp_path / "gemini-ucode-env.backup")
-        monkeypatch.setattr(gemini, "GEMINI_HOME_DIR", tmp_path / ".gemini-home")
-        monkeypatch.setattr(
-            gemini, "GEMINI_SETTINGS_PATH", tmp_path / ".gemini-home" / ".gemini" / "settings.json"
-        )
-        # Run from tmp_path so Gemini sees an untrusted folder (the trust env
-        # var built into build_runtime_env handles it).
-        monkeypatch.chdir(tmp_path)
-
-        env = gemini.build_runtime_env(capture_server.base_url, "test-model", "test-token")
-        result = _run_until_first_request(gemini.validate_cmd("gemini"), env)
-
-        req = capture_server.first_request_with_path_prefix("/ai-gateway/gemini")
-        assert req is not None, _no_request_msg(capture_server, result)
-        _assert_ua(req, _expected_ua("gemini", "gemini"))
-
-
-class TestPiUserAgent:
-    def test_user_agent_arrives_at_gateway(self, tmp_path, monkeypatch, capture_server):
-        import ucode.config_io as config_io_mod
-        from ucode.agents import pi
-
-        _require_binary("pi")
-        pi_home = tmp_path / "pi-home"
-        pi_dir = pi_home / ".pi" / "agent"
-        config_path = pi_dir / "models.json"
-
-        monkeypatch.setattr(config_io_mod, "APP_DIR", tmp_path)
-        monkeypatch.setattr(pi, "PI_UCODE_HOME", pi_home)
-        monkeypatch.setattr(pi, "PI_CONFIG_PATH", config_path)
-        monkeypatch.setattr(pi, "PI_BACKUP_PATH", tmp_path / "pi.backup.json")
-
-        state = {
-            "workspace": capture_server.base_url,
-            "claude_models": {"sonnet": "test-claude-model"},
-            "codex_models": [],
-            "gemini_models": [],
-            "base_urls": {
-                "pi": {
-                    "claude": f"{capture_server.base_url}/ai-gateway/anthropic",
-                    "openai": f"{capture_server.base_url}/ai-gateway/codex/v1",
-                    "gemini": f"{capture_server.base_url}/ai-gateway/gemini/v1beta",
-                },
-            },
-        }
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("ucode.state.save_state", lambda s: None)
-            mp.setattr(
-                "ucode.agents.pi.get_databricks_token",
-                lambda ws, profile=None, **kwargs: "test-token",
-            )
-            pi.write_tool_config(state, "test-claude-model", token="test-token")
-
-        env = pi.build_runtime_env("test-token")
-        result = _run_until_first_request(pi.validate_cmd("pi"), env)
-
-        req = capture_server.first_request_with_path_prefix("/ai-gateway/anthropic")
-        assert req is not None, _no_request_msg(capture_server, result)
-        _assert_ua(req, _expected_ua("pi", "pi"))

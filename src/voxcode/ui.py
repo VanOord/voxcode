@@ -202,7 +202,7 @@ def prompt_for_workspace(
     profile_name is ``None`` when the user typed a URL manually.
     """
     console.print()
-    console.print(Panel(description, title="ucode setup", style="bold blue", expand=False))
+    console.print(Panel(description, title="voxcode setup", style="bold blue", expand=False))
 
     if profiles:
         choices = [
